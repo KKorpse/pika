@@ -7,6 +7,7 @@
 #include "include/pika_slot_command.h"
 #include "include/pika_stream_cgroup_meta_value.h"
 #include "include/pika_stream_meta_value.h"
+#include "include/pika_stream_consumer_meta_value.h"
 #include "include/pika_stream_types.h"
 #include "include/pika_stream_util.h"
 #include "pstd/include/pstd_string.h"
@@ -270,7 +271,7 @@ void XGROUP::Create(const std::shared_ptr<Slot> &slot) {
   StreamUtil::GenerateKeyByTreeID(key, tid);
 
   // 3. if cgroup_meta exists, return error, otherwise create one
-  s = StreamUtil::GetCGroupMeta(key, filed, cgroup_meta_value, slot);
+  s = StreamUtil::GetTreeNodeValue(key, filed, cgroup_meta_value, slot);
   if (s.ok()) {
     LOG(INFO) << "CGroup meta found, faild to create";
     res_.SetRes(CmdRes::kErrOther, "-BUSYGROUP Consumer Group name already exists");
@@ -288,7 +289,7 @@ void XGROUP::Create(const std::shared_ptr<Slot> &slot) {
   }
 
   // 4. insert cgroup meta
-  s = StreamUtil::InsertCGroupMeta(key, group_name_, cgroup_meta_value, slot);
+  s = StreamUtil::InsertTreeNodeValue(key, group_name_, cgroup_meta.value(), slot);
   if (!s.ok()) {
     LOG(FATAL) << "Insert cgroup meta failed";
     res_.SetRes(CmdRes::kErrOther, s.ToString());
@@ -327,21 +328,40 @@ void XGROUP::CreateConsumer(const std::shared_ptr<Slot> &slot) {
     res_.SetRes(CmdRes::kInvalidParameter, "-NOGROUP No such consumer group" + group_name_ + "for key name" + key_);
     return;
   }
-  std::string key;
-  auto &filed = group_name_;
+  std::string cgroup_key;
   std::string cgroup_meta_value;
-  StreamUtil::GenerateKeyByTreeID(key, tid);
-  s = StreamUtil::GetCGroupMeta(key, filed, cgroup_meta_value, slot);
+  StreamUtil::GenerateKeyByTreeID(cgroup_key, tid);
+  s = StreamUtil::GetTreeNodeValue(cgroup_key, group_name_, cgroup_meta_value, slot);
   if (s.IsNotFound()) {
     res_.SetRes(CmdRes::kInvalidParameter, "-NOGROUP No such consumer group" + group_name_ + "for key name" + key_);
     return;
   } else if (!s.ok()) {
-    LOG(FATAL) << "Unexpected error of key: " << key;
+    LOG(FATAL) << "Unexpected error of key: " << cgroup_key;
     res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
   }
 
-  // 4. create and insert cgroup meta
-  
-
+  // 3. create and insert cgroup meta
+  auto consumer_tid = cgroup_meta.pel();
+  std::string consumer_key;
+  std::string consumer_meta_value;
+  StreamUtil::GenerateKeyByTreeID(consumer_key, consumer_tid);
+  s = StreamUtil::GetTreeNodeValue(consumer_key, consumer_name_, consumer_meta_value, slot);
+  if (s.ok()) {
+    LOG(INFO) << "Consumer meta found, faild to create";
+    res_.AppendInteger(0);
+  } else if (s.IsNotFound()) {
+    LOG(INFO) << "Consumer meta not found, create new one";
+    auto &tid_gen = TreeIDGenerator::GetInstance();
+    auto pel_tid = tid_gen.GetNextTreeID(slot);
+    StreamConsumerMetaValue consumer_meta;
+    consumer_meta.Init(pel_tid);
+    s = StreamUtil::InsertTreeNodeValue(consumer_key, consumer_name_, consumer_meta.value(), slot);
+    if (!s.ok()) {
+      LOG(FATAL) << "Insert consumer meta failed";
+      res_.SetRes(CmdRes::kErrOther, s.ToString());
+      return;
+    }
+    res_.AppendInteger(1);
+  }
 }

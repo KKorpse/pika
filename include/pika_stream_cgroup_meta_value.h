@@ -12,6 +12,7 @@ class StreamCGroupMetaValue {
  public:
   explicit StreamCGroupMetaValue() = default;
 
+  // tid and consumers should be set at beginning
   void Init(treeID tid, treeID consumers) {
     pel_ = tid;
     consumers_ = consumers;
@@ -75,6 +76,8 @@ class StreamCGroupMetaValue {
   treeID pel() { return pel_; }
 
   treeID consumers() { return consumers_; }
+
+  std::string& value() { return value_; }
 
  private:
 

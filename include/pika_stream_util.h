@@ -80,19 +80,22 @@ class StreamUtil {
                                           const std::shared_ptr<Slot> &slot);
   static rocksdb::Status InsertStreamMessage(const std::string &key, const std::string &sid, const std::string &message,
                                              const std::shared_ptr<Slot> &slot);
-  static rocksdb::Status GetCGroupMeta(const std::string &key, std::string &group_name, std::string &meta_value,
-                                       const std::shared_ptr<Slot> &slot) {
+
+  // get the abstracted tree node, e.g. get a message in pel, get a consumer meta or get a cgroup meta.
+  static rocksdb::Status GetTreeNodeValue(const std::string &key, std::string &filed, std::string &value,
+                                          const std::shared_ptr<Slot> &slot) {
     rocksdb::Status s;
-    s = slot->db()->HGet(key, group_name, &meta_value);
+    s = slot->db()->HGet(key, filed, &value);
     return s;
   }
 
-  static rocksdb::Status InsertCGroupMeta(const std::string &key, const std::string &group_name,
-                                          const std::string &meta_value, const std::shared_ptr<Slot> &slot) {
+  // set the abstracted tree node, e.g. set a message in pel, add a consumer meta or add a cgroup meta.
+  static rocksdb::Status InsertTreeNodeValue(const std::string &key, const std::string &filed, const std::string &value,
+                                             const std::shared_ptr<Slot> &slot) {
     rocksdb::Status s;
     int res;
-    s = slot->db()->HSet(key, group_name, meta_value, &res);
-    (void) res;
+    s = slot->db()->HSet(key, filed, value, &res);
+    (void)res;
     return s;
   }
 
