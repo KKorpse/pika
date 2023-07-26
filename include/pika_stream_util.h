@@ -11,6 +11,7 @@
 #include "include/pika_conf.h"
 #include "include/pika_slot_command.h"
 #include "include/pika_stream_meta_value.h"
+#include "include/pika_stream_types.h"
 #include "rocksdb/status.h"
 #include "storage/storage.h"
 
@@ -79,6 +80,21 @@ class StreamUtil {
                                           const std::shared_ptr<Slot> &slot);
   static rocksdb::Status InsertStreamMessage(const std::string &key, const std::string &sid, const std::string &message,
                                              const std::shared_ptr<Slot> &slot);
+  static rocksdb::Status GetCGroupMeta(const std::string &key, std::string &group_name, std::string &meta_value,
+                                       const std::shared_ptr<Slot> &slot) {
+    rocksdb::Status s;
+    s = slot->db()->HGet(key, group_name, &meta_value);
+    return s;
+  }
+
+  static rocksdb::Status InsertCGroupMeta(const std::string &key, const std::string &group_name,
+                                          const std::string &meta_value, const std::shared_ptr<Slot> &slot) {
+    rocksdb::Status s;
+    int res;
+    s = slot->db()->HSet(key, group_name, meta_value, &res);
+    (void) res;
+    return s;
+  }
 
   static CmdRes ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrimArgs &args, int &idpos, bool is_xadd);
   static CmdRes ParseReadOrReadGroupArgs(const PikaCmdArgsType &argv, StreamReadGroupReadArgs &args,
@@ -87,14 +103,14 @@ class StreamUtil {
   static CmdRes StreamParseID(const std::string &var, streamID &id, uint64_t missing_seq);
   // be used when we want to return an error if the special IDs + or - are provided.
   static CmdRes StreamParseStrictID(const std::string &var, streamID &id, uint64_t missing_seq, bool *seq_given);
-
+  static bool SerializeStreamID(const streamID &id, std::string &serialized_id);
+  static bool SerializeMessage(const std::vector<std::string> &field_values, std::string &serialized_message,
+                               int field_pos);
+  static void GenerateKeyByTreeID(std::string &field, const treeID tid);
   // Korpse TODO: unit tests
   // return false if the string is invalid
   static bool string2uint64(const char *s, uint64_t &value);
   static bool string2int64(const char *s, int64_t &value);
-  static bool SerializeMessage(const std::vector<std::string> &field_values, std::string &serialized_message,
-                               int field_pos);
-  static bool SerializeStreamID(const streamID &id, std::string &serialized_id);
   static uint64_t GetCurrentTimeMs();
 
  private:
