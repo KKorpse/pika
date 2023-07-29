@@ -208,6 +208,83 @@ void XReadCmd::Do(std::shared_ptr<Slot> slot) {
   }
 }
 
+void XReadGroupCmd::DoInitial() {
+  if (!CheckArg(argv_.size())) {
+    res_.SetRes(CmdRes::kWrongNum, kCmdNameXRead);
+    return;
+  }
+
+  res_ = StreamUtil::ParseReadOrReadGroupArgs(argv_, args_, false);
+}
+
+void XReadGroupCmd::Do(std::shared_ptr<Slot> slot) {
+  assert(args_.unedited_keys.size() == args_.unparsed_ids.size());
+  rocksdb::Status s;
+  streamID id;
+  for (int i = 0; i < args_.unparsed_ids.size(); i++) {
+    const auto &key = args_.keys[i];
+    const auto &unparsed_id = args_.unparsed_ids[i];
+
+    // try to find stream_meta
+    std::string stream_meta_str{};
+    StreamMetaValue stream_meta;
+    s = StreamUtil::GetStreamMeta(key, stream_meta_str, slot);
+    if (s.IsNotFound()) {
+      LOG(INFO) << "Stream meta not found, skip";
+      continue;
+    } else if (!s.ok()) {
+      LOG(ERROR) << "Unexpected error of key: " << key;
+      res_.SetRes(CmdRes::kErrOther, s.ToString());
+      return;
+    } else {
+      stream_meta.ParseFrom(stream_meta_str);
+    }
+
+    // try to find cgroup_meta
+    treeID tid = stream_meta.groups_id();
+    std::string cgroup_meta_str;
+    StreamCGroupMetaValue cgroup_meta;
+    s = StreamUtil::GetTreeNodeValue(tid, args_.group_name, cgroup_meta_str, slot);
+    if (s.IsNotFound()) {
+      LOG(WARNING) << "CGroup meta not found";
+      res_.SetRes(CmdRes::kInvalidParameter, "-NOGROUP No such key " + key + " or consumer group " + args_.group_name +
+                                                 " in XREADGROUP with GROUP option");
+      return;
+    } else if (!s.ok()) {
+      LOG(ERROR) << "Unexpected error of tree id: " << tid;
+      res_.SetRes(CmdRes::kErrOther, s.ToString());
+      return;
+    } else {
+      cgroup_meta.ParseFrom(cgroup_meta_str);
+    }
+
+    // read messages
+    if (unparsed_id == "$") {
+      LOG(WARNING) << R"(given "$" in XREADGROUP command)";
+      res_.SetRes(CmdRes::kSyntaxErr,
+                  "The $ ID is meaningless in the context of "
+                  "XREADGROUP: you want to read the history of "
+                  "this consumer by specifying a proper ID, or "
+                  "use the > ID to get new messages. The $ ID would "
+                  "just return an empty result set.");
+      return;
+    } else if (unparsed_id == "<") {
+      LOG(INFO) << "given \"$\" in XREAD command";
+      id = cgroup_meta.last_id();
+    } else {
+      LOG(INFO) << "given id: " << unparsed_id;
+      res_ = StreamUtil::StreamParseStrictID(unparsed_id, id, 0, nullptr);
+      if (!res_.ok()) {
+        return;
+      }
+    }
+
+    res_.AppendArrayLen(2);
+    res_.AppendString(key);
+    StreamUtil::ScanAndAppendMessageToRes(key, id, STREAMID_MAX, args_.count, res_, slot);
+  }
+}
+
 /* XGROUP CREATE <key> <groupname> <id or $> [MKSTREAM] [ENTRIESREAD entries_read]
  * XGROUP SETID <key> <groupname> <id or $> [ENTRIESREAD entries_read]
  * XGROUP DESTROY <key> <groupname>
@@ -318,14 +395,11 @@ void XGROUP::Create(const std::shared_ptr<Slot> &slot) {
     tid = tid_gen.GetNextTreeID(slot);
     stream_meta.set_groups_id(tid);
   }
-
-  std::string key;
   auto &filed = group_name_;
   std::string cgroup_meta_value;
-  StreamUtil::GenerateKeyByTreeID(key, tid);
 
   // 3. if cgroup_meta exists, return error, otherwise create one
-  s = StreamUtil::GetTreeNodeValue(key, filed, cgroup_meta_value, slot);
+  s = StreamUtil::GetTreeNodeValue(tid, filed, cgroup_meta_value, slot);
   if (s.ok()) {
     LOG(INFO) << "CGroup meta found, faild to create";
     res_.SetRes(CmdRes::kErrOther, "-BUSYGROUP Consumer Group name already exists");
@@ -337,13 +411,13 @@ void XGROUP::Create(const std::shared_ptr<Slot> &slot) {
     auto consumers_tid = tid_gen.GetNextTreeID(slot);
     cgroup_meta.Init(pel_tid, consumers_tid);
   } else if (!s.ok()) {
-    LOG(ERROR) << "Unexpected error of key: " << key;
+    LOG(ERROR) << "Unexpected error of tree id: " << tid;
     res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
   }
 
   // 4. insert cgroup meta
-  s = StreamUtil::InsertTreeNodeValue(key, group_name_, cgroup_meta.value(), slot);
+  s = StreamUtil::InsertTreeNodeValue(tid, group_name_, cgroup_meta.value(), slot);
   if (!s.ok()) {
     LOG(ERROR) << "Insert cgroup meta failed";
     res_.SetRes(CmdRes::kErrOther, s.ToString());
@@ -382,25 +456,23 @@ void XGROUP::CreateConsumer(const std::shared_ptr<Slot> &slot) {
     res_.SetRes(CmdRes::kInvalidParameter, "-NOGROUP No such consumer group" + group_name_ + "for key name" + key_);
     return;
   }
-  std::string cgroup_key;
+
   std::string cgroup_meta_value;
-  StreamUtil::GenerateKeyByTreeID(cgroup_key, tid);
-  s = StreamUtil::GetTreeNodeValue(cgroup_key, group_name_, cgroup_meta_value, slot);
+  s = StreamUtil::GetTreeNodeValue(tid, group_name_, cgroup_meta_value, slot);
   if (s.IsNotFound()) {
     res_.SetRes(CmdRes::kInvalidParameter, "-NOGROUP No such consumer group" + group_name_ + "for key name" + key_);
     return;
   } else if (!s.ok()) {
-    LOG(ERROR) << "Unexpected error of key: " << cgroup_key;
+    LOG(ERROR) << "Unexpected error of tree id: " << tid;
     res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
   }
+  cgroup_meta.ParseFrom(cgroup_meta_value);
 
   // 3. create and insert cgroup meta
   auto consumer_tid = cgroup_meta.pel();
-  std::string consumer_key;
   std::string consumer_meta_value;
-  StreamUtil::GenerateKeyByTreeID(consumer_key, consumer_tid);
-  s = StreamUtil::GetTreeNodeValue(consumer_key, consumer_name_, consumer_meta_value, slot);
+  s = StreamUtil::GetTreeNodeValue(consumer_tid, consumer_name_, consumer_meta_value, slot);
   if (s.ok()) {
     LOG(INFO) << "Consumer meta found, faild to create";
     res_.AppendInteger(0);
@@ -410,7 +482,7 @@ void XGROUP::CreateConsumer(const std::shared_ptr<Slot> &slot) {
     auto pel_tid = tid_gen.GetNextTreeID(slot);
     StreamConsumerMetaValue consumer_meta;
     consumer_meta.Init(pel_tid);
-    s = StreamUtil::InsertTreeNodeValue(consumer_key, consumer_name_, consumer_meta.value(), slot);
+    s = StreamUtil::InsertTreeNodeValue(consumer_tid, consumer_name_, consumer_meta.value(), slot);
     if (!s.ok()) {
       LOG(ERROR) << "Insert consumer meta failed";
       res_.SetRes(CmdRes::kErrOther, s.ToString());

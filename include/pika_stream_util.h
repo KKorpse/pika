@@ -88,12 +88,18 @@ class StreamUtil {
                                              const std::shared_ptr<Slot> &slot);
 
   // get the abstracted tree node, e.g. get a message in pel, get a consumer meta or get a cgroup meta.
-  static rocksdb::Status GetTreeNodeValue(const std::string &key, std::string &filed, std::string &value,
+  // in cgroup tree, field is groupname
+  // in consumer tree, field is consumername
+  // in pel tree, field is messageID 
+  static rocksdb::Status GetTreeNodeValue(const treeID tid, std::string &field, std::string &value,
                                           const std::shared_ptr<Slot> &slot);
 
   // set the abstracted tree node, e.g. set a message in pel, add a consumer meta or add a cgroup meta.
-  static rocksdb::Status InsertTreeNodeValue(const std::string &key, const std::string &filed, const std::string &value,
-                                             const std::shared_ptr<Slot> &slot);
+  // in cgroup tree, field is groupname, value is cgroup meta
+  // in consumer tree, field is consumername, value is consumer meta
+  // in pel tree, field is messageID, value is pel meta
+  static rocksdb::Status InsertTreeNodeValue(const treeID tid, const std::string &filed,
+                                                const std::string &value, const std::shared_ptr<Slot> &slot);
 
   //===--------------------------------------------------------------------===//
   // Parse instraction args
@@ -192,7 +198,7 @@ class StreamUtil {
     }
   }
 
-//  private:
+  //  private:
   static CmdRes StreamGenericParseID(const std::string &var, streamID &id, uint64_t missing_seq, bool strict,
                                      bool *seq_given);
 
