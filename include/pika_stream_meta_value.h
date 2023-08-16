@@ -65,7 +65,7 @@ class StreamMetaValue {
     memcpy(&last_id_, pos, sizeof(streamID));
     pos += sizeof(streamID);
     memcpy(&max_deleted_entry_id_, pos, sizeof(streamID));
-    pos += sizeof(length_);
+    pos += sizeof(streamID);
     memcpy(&length_, pos, sizeof(size_t));
   }
 

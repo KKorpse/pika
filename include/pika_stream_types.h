@@ -39,7 +39,7 @@ struct StreamAddTrimArgs {
   streamID id;
   bool id_given{false};
   bool seq_given{false};
-  bool no_mkstream{true};
+  bool no_mkstream{false};
 
   // XADD + XTRIM common options
   StreamTrimStrategy trim_strategy{0};

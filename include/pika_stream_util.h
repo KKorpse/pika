@@ -257,6 +257,10 @@ class StreamUtil {
       // 2 destroy all the cgroup
       // 2.1 find all the cgroups' meta
       auto cgroup_tid = stream_meta.groups_id();
+      if (cgroup_tid == kINVALID_TREE_ID) {
+        LOG(INFO) << "No cgroup found, skip";
+        continue;
+      }
       std::vector<storage::FieldValue> field_values;
       s = GetAllTreeNode(cgroup_tid, field_values, slot);
       if (!s.ok() && !s.IsNotFound()) {

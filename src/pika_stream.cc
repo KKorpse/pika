@@ -38,11 +38,19 @@ void XAddCmd::DoInitial() {
   }
 
   field_pos_ = idpos + 1;
-  if ((argv_.size() - idpos) % 2 == 1 || (argv_.size() - field_pos_) < 2) {
+  if ((argv_.size() - field_pos_) % 2 == 1 || (argv_.size() - field_pos_) < 2) {
     LOG(INFO) << "Invalid field_values_ size: " << argv_.size() - field_pos_;
-    res_.SetRes(CmdRes::kInvalidParameter);
+    res_.SetRes(CmdRes::kWrongNum);
     return;
   }
+
+  // FIXME: 
+  // if (parsed_args.id_given && parsed_args.seq_given &&
+  //     parsed_args.id.ms == 0 && parsed_args.id.seq == 0)
+  // {
+  //     addReplyError(c,"The ID specified in XADD must be greater than 0-0");
+  //     return;
+  // }
   res_.SetRes(CmdRes::kOk);
 }
 
@@ -53,8 +61,8 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
   s = StreamUtil::GetStreamMeta(key_, meta_value, slot);
   StreamMetaValue stream_meta;
   if (s.IsNotFound() && args_.no_mkstream) {
-    LOG(INFO) << "Stream not exists and not create";
-    res_.SetRes(CmdRes::kInvalidParameter, "Stream not exists");
+    LOG(INFO) << "Stream not exists and no_mkstream";
+    res_.SetRes(CmdRes::kNotFound);
     return;
   } else if (s.IsNotFound()) {
     LOG(INFO) << "Stream meta not found, create new one";
@@ -63,8 +71,9 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
     LOG(ERROR) << "Unexpected error of key: " << key_;
     res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
+  } else {
+    stream_meta.ParseFrom(meta_value);
   }
-  stream_meta.ParseFrom(meta_value);
 
   // 2 append the message to storage
   std::string message_str;
@@ -98,6 +107,9 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
   stream_meta.set_entries_added(stream_meta.entries_added() + message_len);
   stream_meta.set_last_id(args_.id);
   stream_meta.add_length(message_len);
+
+  StreamMetaValue test;
+  test.ParseFrom(stream_meta.value());
 
   // 4 trim the stream if needed
   if (args_.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
