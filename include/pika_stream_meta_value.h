@@ -12,6 +12,7 @@
 
 #include "glog/logging.h"
 #include "include/pika_stream_types.h"
+#include "storage/src/coding.h"
 
 static const size_t kDefaultStreamValueLength = sizeof(treeID) + sizeof(uint64_t) + 3 * sizeof(streamID) + sizeof(uint64_t);
 
@@ -102,7 +103,7 @@ class StreamMetaValue {
 
   void set_entries_added(uint64_t entries_added) {
     assert(value_.size() == kDefaultStreamValueLength);
-    entries_added_ += entries_added;
+    entries_added_ = entries_added;
     char* dst = const_cast<char*>(value_.data()) + sizeof(treeID);
     memcpy(dst, &entries_added_, sizeof(uint64_t));
   }
