@@ -116,7 +116,9 @@ class StreamUtil {
   // Common functions for command implementation
   //===--------------------------------------------------------------------===//
 
-  static CmdRes ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrimArgs &args, int *idpos, bool is_xadd);
+  // @res: if error occurs, res will be set, otherwise res will be none
+  static void ParseAddOrTrimArgsOrRep(CmdRes &res, const PikaCmdArgsType &argv, StreamAddTrimArgs &args, int *idpos,
+                                      bool is_xadd);
   static CmdRes ParseReadOrReadGroupArgs(const PikaCmdArgsType &argv, StreamReadGroupReadArgs &args,
                                          bool is_xreadgroup);
 
@@ -135,11 +137,16 @@ class StreamUtil {
                                     const std::shared_ptr<Slot> &slot, CmdRes &res, const StreamAddTrimArgs &args);
 
   static CmdRes TrimStream(const std::string &key, StreamAddTrimArgs &args, const std::shared_ptr<Slot> &slot);
+
   //===--------------------------------------------------------------------===//
-  // Serialize and deserialize
+  // StreamID operator
   //===--------------------------------------------------------------------===//
 
-  static bool StreamID2String(const streamID &id, std::string &serialized_id);
+  // serialize stream id to binary format
+  static bool SerializeStreamID(const streamID &id, std::string &serialized_id);
+
+  // deserialize stream id from binary format
+  static bool DeserializeStreamID(const std::string &serialized_id, streamID &id);
 
   // be used when - and + are acceptable IDs.
   static CmdRes StreamParseID(const std::string &var, streamID &id, uint64_t missing_seq);
@@ -180,13 +187,13 @@ class StreamUtil {
     std::string start_field;
     std::string end_field;
     rocksdb::Slice pattern = "*";  // match all the fields from start_field to end_field
-    if (!StreamUtil::StreamID2String(start_sid, start_field)) {
+    if (!StreamUtil::SerializeStreamID(start_sid, start_field)) {
       LOG(ERROR) << "Serialize stream id failed";
       res.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
     }
     if (end_sid == kSTREAMID_MAX) {
       end_field = "";  // empty for no end_sid
-    } else if (!StreamUtil::StreamID2String(end_sid, end_field)) {
+    } else if (!StreamUtil::SerializeStreamID(end_sid, end_field)) {
       LOG(ERROR) << "Serialize stream id failed";
       res.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
     }
@@ -245,7 +252,7 @@ class StreamUtil {
       std::string meta_value;
       auto s = StreamUtil::GetStreamMeta(key, meta_value, slot);
       if (s.IsNotFound()) {
-        LOG(INFO) << "Stream meta not found, skip";
+        LOG(INFO) << "Stream meta not found, skip key: " << key;
         continue;
       } else if (!s.ok()) {
         LOG(ERROR) << "Get stream meta failed";

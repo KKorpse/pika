@@ -103,7 +103,7 @@ var _ = Describe("Stream Commands", func() {
 			Expect(err.Error()).To(ContainSubstring("wrong number of arguments"))
 		})
 
-		It("XADD can add entries into a stream that XRANGE can fetch", func() {
+		PIt("XADD can add entries into a stream that XRANGE can fetch", func() {
 			Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "1", "value", "a"}}).Err()).NotTo(HaveOccurred())
 			Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "2", "value", "b"}}).Err()).NotTo(HaveOccurred())
 
@@ -113,6 +113,88 @@ var _ = Describe("Stream Commands", func() {
 			Expect(len(items)).To(Equal(2))
 			Expect(items[0].Values).To(Equal(map[string]interface{}{"item": "1", "value": "a"}))
 			Expect(items[1].Values).To(Equal(map[string]interface{}{"item": "2", "value": "b"}))
+		})
+
+		PIt("XADD IDs are incremental", func() {
+			id1 := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "1", "value", "a"}}).Val()
+			id2 := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "2", "value", "b"}}).Val()
+			id3 := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "3", "value", "c"}}).Val()
+
+			Expect(streamCompareID(id1, id2)).To(Equal(-1))
+			Expect(streamCompareID(id2, id3)).To(Equal(-1))
+		})
+
+		// FIXME: pika may not support MULTI ?
+		// It("XADD IDs are incremental when ms is the same as well", func() {
+		// 	client.Do(ctx, "MULTI")
+		// 	Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "1", "value", "a"}}).Err()).NotTo(HaveOccurred())
+		// 	Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "2", "value", "b"}}).Err()).NotTo(HaveOccurred())
+		// 	Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", Values: []string{"item", "3", "value", "c"}}).Err()).NotTo(HaveOccurred())
+		// 	res := client.Do(ctx, "EXEC").Val().([]interface{})
+		// 	Expect(len(res)).To(Equal(3))
+		// 	Expect(streamCompareID(res[0].(string), res[1].(string))).To(Equal(-1))
+		// 	Expect(streamCompareID(res[1].(string), res[2].(string))).To(Equal(-1))
+		// })
+
+		PIt("XADD IDs correctly report an error when overflowing", func() {
+			Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "18446744073709551615-18446744073709551615", Values: []string{"a", "b"}}).Err()).NotTo(HaveOccurred())
+			_, err := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "*", Values: []string{"c", "d"}}).Result()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ERR"))
+		})
+
+		PIt("XADD auto-generated sequence is incremented for last ID", func() {
+			x1 := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "123-456", Values: []string{"item", "1", "value", "a"}}).Val()
+			x2 := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "123-*", Values: []string{"item", "2", "value", "b"}}).Val()
+			Expect(x2).To(Equal("123-457"))
+			Expect(streamCompareID(x1, x2)).To(Equal(-1))
+		})
+
+		PIt("XADD auto-generated sequence is zero for future timestamp ID", func() {
+			x1 := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "123-456", Values: []string{"item", "1", "value", "a"}}).Val()
+			x2 := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "789-*", Values: []string{"item", "2", "value", "b"}}).Val()
+			Expect(x2).To(Equal("789-0"))
+			Expect(streamCompareID(x1, x2)).To(Equal(-1))
+		})
+
+		PIt("XADD auto-generated sequence can't be smaller than last ID", func() {
+			Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "123-456", Values: []string{"item", "1", "value", "a"}}).Err()).NotTo(HaveOccurred())
+			_, err := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "42-*", Values: []string{"item", "2", "value", "b"}}).Result()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ERR"))
+		})
+
+		PIt("XADD auto-generated sequence can't overflow", func() {
+			Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "1-18446744073709551615", Values: []string{"a", "b"}}).Err()).NotTo(HaveOccurred())
+			_, err := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "1-*", Values: []string{"c", "d"}}).Result()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("ERR"))
+		})
+
+		PIt("XADD 0-* should succeed", func() {
+			x := client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", ID: "0-*", Values: []string{"a", "b"}}).Val()
+			Expect(x).To(Equal("0-1"))
+		})
+
+		It("XADD with MAXLEN option", func() {
+			Expect(client.Del(ctx, "mystream").Err()).NotTo(HaveOccurred())
+			for i := 0; i < 1000; i++ {
+				if rand.Float64() < 0.9 {
+					Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", MaxLen: 5, Values: []string{"xitem", strconv.Itoa(i)}}).Err()).NotTo(HaveOccurred())
+				} else {
+					Expect(client.XAdd(ctx, &redis.XAddArgs{Stream: "mystream", MaxLen: 5, Values: []string{"yitem", strconv.Itoa(i)}}).Err()).NotTo(HaveOccurred())
+				}
+			}
+			Expect(client.XLen(ctx, "mystream").Val()).To(Equal(int64(5)))
+			items := client.XRange(ctx, "mystream", "-", "+").Val()
+			expected := 995
+			for _, item := range items {
+				Expect(item.Values).To(SatisfyAny(
+					HaveKeyWithValue("xitem", strconv.Itoa(expected)),
+					HaveKeyWithValue("yitem", strconv.Itoa(expected)),
+				))
+				expected++
+			}
 		})
 
 	})

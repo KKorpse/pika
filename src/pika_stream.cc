@@ -21,7 +21,46 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 
-// Korpse:FIXME: check the argv_ size
+void XAddCmd::GenerateStreamIDOrRep(const StreamMetaValue &stream_meta) {
+  auto &id = args_.id;
+  if (args_.id_given && args_.seq_given && id.ms == 0 && id.seq == 0) {
+    LOG(INFO) << "The ID specified in XADD must be greater than 0-0";
+    res_.SetRes(CmdRes::kInvalidParameter);
+    return;
+  }
+
+  if (!args_.id_given || !args_.seq_given) {
+    // if id not given, generate one
+    if (!args_.id_given) {
+      LOG(INFO) << "ID not given, generate ms";
+      id.ms = StreamUtil::GetCurrentTimeMs();
+    }
+    // generate seq
+    auto last_id = stream_meta.last_id();
+    if (id.ms < last_id.ms) {
+      LOG(ERROR) << "Time backwards detected !";
+      res_.SetRes(CmdRes::kErrOther, "Fatal! Time backwards detected !");
+      return;
+    } else if (id.ms == last_id.ms) {
+      if (last_id.seq == UINT64_MAX) {
+        res_.SetRes(CmdRes::kErrOther, "Fatal! Sequence number overflow !");
+        return;
+      }
+      id.seq = last_id.seq + 1;
+    } else {
+      id.seq = 0;
+    }
+  } else {
+    //  Full ID given, check id
+    auto last_id = stream_meta.last_id();
+    if (id.ms < last_id.ms || (id.ms == last_id.ms && id.seq <= last_id.seq)) {
+      LOG(ERROR) << "INVALID ID: " << id.ms << "-" << id.seq << " < " << last_id.ms << "-" << last_id.seq;
+      res_.SetRes(CmdRes::kErrOther, "INVALID ID given");
+      return;
+    }
+  }
+}
+
 void XAddCmd::DoInitial() {
   if (!CheckArg(argv_.size())) {
     res_.SetRes(CmdRes::kWrongNum, kCmdNameXAdd);
@@ -29,29 +68,21 @@ void XAddCmd::DoInitial() {
   }
   key_ = argv_[1];
   int idpos{-1};
-  res_ = StreamUtil::ParseAddOrTrimArgs(argv_, args_, &idpos, true);
-  if (!res_.ok()) {
+  StreamUtil::ParseAddOrTrimArgsOrRep(res_, argv_, args_, &idpos, true);
+  if (!res_.none()) {
     return;
   } else if (idpos < 0) {
     LOG(ERROR) << "Invalid idpos: " << idpos;
     res_.SetRes(CmdRes::kErrOther);
+    return;
   }
 
   field_pos_ = idpos + 1;
   if ((argv_.size() - field_pos_) % 2 == 1 || (argv_.size() - field_pos_) < 2) {
     LOG(INFO) << "Invalid field_values_ size: " << argv_.size() - field_pos_;
-    res_.SetRes(CmdRes::kWrongNum);
+    res_.SetRes(CmdRes::kWrongNum, kCmdNameXAdd);
     return;
   }
-
-  // FIXME: 
-  // if (parsed_args.id_given && parsed_args.seq_given &&
-  //     parsed_args.id.ms == 0 && parsed_args.id.seq == 0)
-  // {
-  //     addReplyError(c,"The ID specified in XADD must be greater than 0-0");
-  //     return;
-  // }
-  res_.SetRes(CmdRes::kOk);
 }
 
 void XAddCmd::Do(std::shared_ptr<Slot> slot) {
@@ -76,23 +107,23 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
   }
 
   // 2 append the message to storage
-  std::string message_str;
-  std::string id_str;
-  res_ = GenerateStreamID(stream_meta, args_, args_.id);
-  if (!res_.ok()) {
+  std::string value;
+  std::string field;
+  GenerateStreamIDOrRep(stream_meta);
+  if (!res_.none()) {
     return;
   }
-  if (!StreamUtil::SerializeMessage(argv_, message_str, field_pos_)) {
+  if (!StreamUtil::SerializeMessage(argv_, value, field_pos_)) {
     LOG(ERROR) << "Serialize message failed";
     res_.SetRes(CmdRes::kErrOther, "Serialize message failed");
     return;
   }
-  if (!StreamUtil::StreamID2String(args_.id, id_str)) {
+  if (!StreamUtil::SerializeStreamID(args_.id, field)) {
     LOG(ERROR) << "Serialize stream id failed";
     res_.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
     return;
   }
-  s = StreamUtil::InsertStreamMessage(key_, id_str, message_str, slot);
+  s = StreamUtil::InsertStreamMessage(key_, field, value, slot);
   if (!s.ok()) {
     LOG(ERROR) << "Insert stream message failed";
     res_.SetRes(CmdRes::kErrOther, s.ToString());
@@ -100,16 +131,12 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
   }
 
   // 3 update stream meta, Korpse TODO: is there any arg left to update?
-  auto message_len = (argv_.size() - field_pos_) / 2;
   if (stream_meta.entries_added() == 0) {
     stream_meta.set_first_id(args_.id);
   }
-  stream_meta.set_entries_added(stream_meta.entries_added() + message_len);
+  stream_meta.set_entries_added(stream_meta.entries_added() + 1);
   stream_meta.set_last_id(args_.id);
-  stream_meta.add_length(message_len);
-
-  StreamMetaValue test;
-  test.ParseFrom(stream_meta.value());
+  stream_meta.set_length(stream_meta.length() + 1);
 
   // 4 trim the stream if needed
   if (args_.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
@@ -126,52 +153,40 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
     res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
   }
-  res_.SetRes(CmdRes::kOk);
+
+  res_.clear();
+  res_.AppendString(args_.id.ToString());
 }
 
-CmdRes XAddCmd::GenerateStreamID(const StreamMetaValue &stream_meta, const StreamAddTrimArgs &args_, streamID &id) {
-  CmdRes res;
-  if (args_.id_given && args_.seq_given && id.ms == 0 && id.seq == 0) {
-    LOG(INFO) << "The ID specified in XADD must be greater than 0-0";
-    res.SetRes(CmdRes::kInvalidParameter);
-    return res;
+void XLenCmd::DoInitial() {
+  if (!CheckArg(argv_.size())) {
+    res_.SetRes(CmdRes::kWrongNum, kCmdNameXLen);
+    return;
   }
-  // 2.2 if id not given, generate one
-  if (!args_.id_given) {
-    LOG(INFO) << "ID not given, generate id";
-    auto last_id = stream_meta.last_id();
-    id.ms = StreamUtil::GetCurrentTimeMs();
-    if (id.ms < last_id.ms) {
-      LOG(ERROR) << "Time backwards detected !";
-      res.SetRes(CmdRes::kErrOther, "Fatal! Time backwards detected !");
-      return res;
-    } else if (id.ms == last_id.ms) {
-      assert(last_id.seq < UINT64_MAX);
-      id.seq = last_id.seq + 1;
-    } else {
-      id.seq = 0;
-    }
-  } else if (!args_.seq_given) {
-    LOG(INFO) << "ID not given, generate id";
-    auto last_id = stream_meta.last_id();
-    if (id.ms < last_id.ms) {
-      LOG(ERROR) << "Time backwards detected !";
-      res.SetRes(CmdRes::kErrOther, "Fatal! Time backwards detected !");
-      return res;
-    }
-    assert(last_id.seq < UINT64_MAX);
-    id.seq = last_id.seq + 1;
-  } else {
-    LOG(INFO) << "ID given, check id";
-    auto last_id = stream_meta.last_id();
-    if (id.ms < last_id.ms || (id.ms == last_id.ms && id.seq <= last_id.seq)) {
-      LOG(ERROR) << "INVALID ID: " << id.ms << "-" << id.seq << " < " << last_id.ms << "-" << last_id.seq;
-      res.SetRes(CmdRes::kErrOther, "INVALID ID given");
-      return res;
-    }
+  key_ = argv_[1];
+}
+
+void XLenCmd::Do(std::shared_ptr<Slot> slot) {
+  std::string meta_value;
+  rocksdb::Status s;
+  s = StreamUtil::GetStreamMeta(key_, meta_value, slot);
+  if (s.IsNotFound()) {
+    res_.SetRes(CmdRes::kNotFound);
+    return;
+  } else if (!s.ok()) {
+    LOG(ERROR) << "Unexpected error of key: " << key_;
+    res_.SetRes(CmdRes::kErrOther, s.ToString());
+    return;
   }
-  res.SetRes(CmdRes::kOk);
-  return res;
+
+  StreamMetaValue stream_meta;
+  stream_meta.ParseFrom(meta_value);
+  if (stream_meta.length() > INT_MAX) {
+    res_.SetRes(CmdRes::kErrOther, "stream's length is larger than INT_MAX");
+    return;
+  }
+  res_.AppendInteger(static_cast<int>(stream_meta.length()));
+  return;
 }
 
 void XReadCmd::DoInitial() {
@@ -593,38 +608,6 @@ void XRangeCmd::Do(std::shared_ptr<Slot> slot) {
   return;
 }
 
-void XLenCmd::DoInitial() {
-  if (!CheckArg(argv_.size())) {
-    res_.SetRes(CmdRes::kWrongNum, kCmdNameXLen);
-    return;
-  }
-
-  key_ = argv_[1];
-}
-
-void XLenCmd::Do(std::shared_ptr<Slot> slot) {
-  std::string meta_value;
-  rocksdb::Status s;
-  s = StreamUtil::GetStreamMeta(key_, meta_value, slot);
-  if (s.IsNotFound()) {
-    res_.SetRes(CmdRes::kNotFound);
-    return;
-  } else if (!s.ok()) {
-    LOG(ERROR) << "Unexpected error of key: " << key_;
-    res_.SetRes(CmdRes::kErrOther, s.ToString());
-    return;
-  }
-
-  StreamMetaValue stream_meta;
-  stream_meta.ParseFrom(meta_value);
-  if (stream_meta.length() > INT_MAX) {
-    res_.SetRes(CmdRes::kErrOther, "stream's length is larger than INT_MAX");
-    return;
-  }
-  res_.AppendInteger(static_cast<int>(stream_meta.length()));
-  return;
-}
-
 void XAckCmd::DoInitial() {
   if (!CheckArg(argv_.size())) {
     res_.SetRes(CmdRes::kWrongNum, kCmdNameXAck);
@@ -725,10 +708,12 @@ void XTrimCmd::DoInitial() {
   }
 
   key_ = argv_[1];
-  res_ = StreamUtil::ParseAddOrTrimArgs(argv_, args_, nullptr, true);
-  if (!res_.ok()) {
+  StreamUtil::ParseAddOrTrimArgsOrRep(res_, argv_, args_, nullptr, true);
+  if (!res_.none()) {
     return;
   }
+
+  res_.SetRes(CmdRes::kOk);
 }
 
 void XTrimCmd::Do(std::shared_ptr<Slot> slot) { res_ = StreamUtil::TrimStream(key_, args_, slot); }

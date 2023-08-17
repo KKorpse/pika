@@ -19,9 +19,8 @@
 
 bool StreamUtil::is_stream_meta_hash_created_ = false;
 
-// Korpse TODO: test
-CmdRes StreamUtil::ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrimArgs &args, int *idpos, bool is_xadd) {
-  CmdRes res;
+void StreamUtil::ParseAddOrTrimArgsOrRep(CmdRes &res, const PikaCmdArgsType &argv, StreamAddTrimArgs &args,
+                                            int *idpos, bool is_xadd) {
   int i = 2;
   bool limit_given = false;
   for (; i < argv.size(); ++i) {
@@ -36,7 +35,7 @@ CmdRes StreamUtil::ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrim
       // case: XADD mystream ... MAXLEN [= | ~] threshold ...
       if (args.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
         res.SetRes(CmdRes::kSyntaxErr, "syntax error, MAXLEN and MINID options at the same time are not compatible");
-        return res;
+        return;
       }
       const auto &next = argv[i + 1];
       if (moreargs >= 2 && (next == "~" || next == "=")) {
@@ -55,7 +54,7 @@ CmdRes StreamUtil::ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrim
       // case: XADD mystream ... MINID [= | ~] threshold ...
       if (args.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
         res.SetRes(CmdRes::kSyntaxErr, "syntax error, MAXLEN and MINID options at the same time are not compatible");
-        return res;
+        return;
       }
       const auto &next = argv[i + 1];
       if (moreargs >= 2 && (next == "~" || next == "=") && next.size() == 1) {
@@ -66,7 +65,7 @@ CmdRes StreamUtil::ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrim
       auto ret = StreamUtil::StreamParseID(argv[i + 1], args.minid, 0);
       if (!ret.ok()) {
         res = ret;
-        return res;
+        return;
       }
       i++;
       args.trim_strategy = StreamTrimStrategy::TRIM_STRATEGY_MINID;
@@ -76,7 +75,7 @@ CmdRes StreamUtil::ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrim
       // case: XADD mystream ... ~ threshold LIMIT count ...
       // we do not need approx trim, so we do not support LIMIT option
       res.SetRes(CmdRes::kSyntaxErr, "syntax error, Pika do not support LIMIT option");
-      return res;
+      return;
 
     } else if (is_xadd && strcasecmp(opt.c_str(), "nomkstream") == 0) {
       // case: XADD mystream ... NOMKSTREAM ...
@@ -87,12 +86,13 @@ CmdRes StreamUtil::ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrim
       auto ret = StreamUtil::StreamParseStrictID(argv[i], args.id, 0, &args.seq_given);
       if (!ret.ok()) {
         res = ret;
-        return res;
+        return;
       }
       args.id_given = true;
+      break;
     } else {
       res.SetRes(CmdRes::kSyntaxErr);
-      return res;
+      return;
     }
   }  // end for
 
@@ -101,14 +101,22 @@ CmdRes StreamUtil::ParseAddOrTrimArgs(const PikaCmdArgsType &argv, StreamAddTrim
   } else if (is_xadd) {
     LOG(ERROR) << "idpos is null, xadd comand must parse idpos";
   }
-
-  res.SetRes(CmdRes::kOk);
-  return res;
 }
 
 rocksdb::Status StreamUtil::GetStreamMeta(const std::string &key, std::string &value,
                                           const std::shared_ptr<Slot> &slot) {
   return slot->db()->HGet(STREAM_META_HASH_KEY, key, &value);
+}
+
+// no need to be thread safe, only xadd will call this function
+// and xadd can be locked by the same key using current_key()
+rocksdb::Status StreamUtil::UpdateStreamMeta(const std::string &key, std::string &meta_value,
+                                             const std::shared_ptr<Slot> &slot) {
+  rocksdb::Status s;
+  int32_t temp{0};
+  s = slot->db()->HSet(STREAM_META_HASH_KEY, key, meta_value, &temp);
+  (void)temp;
+  return s;
 }
 
 // Korpse TODO: test
@@ -248,20 +256,6 @@ bool StreamUtil::string2int32(const char *s, int32_t &value) {
   return true;
 }
 
-// no need to be thread safe, only xadd will call this function
-// and xadd can be locked by the same key using current_key()
-rocksdb::Status StreamUtil::UpdateStreamMeta(const std::string &key, std::string &meta_value,
-                                             const std::shared_ptr<Slot> &slot) {
-  rocksdb::Status s;
-  int32_t temp{0};
-  s = slot->db()->HSet(STREAM_META_HASH_KEY, key, meta_value, &temp);
-  (void)temp;
-  if (!s.ok()) {
-    LOG(ERROR) << "HSet failed, key: " << key << ", value: " << meta_value;
-  }
-  return s;
-}
-
 void StreamUtil::DeleteStreamMeta(const std::string &key, const std::shared_ptr<Slot> &slot) {
   int32_t ret;
   auto s = slot->db()->HDel({STREAM_META_HASH_KEY}, {key}, &ret);
@@ -320,10 +314,19 @@ bool StreamUtil::DeserializeMessage(const std::string &message, std::vector<std:
   return true;
 }
 
-bool StreamUtil::StreamID2String(const streamID &id, std::string &serialized_id) {
+bool StreamUtil::SerializeStreamID(const streamID &id, std::string &serialized_id) {
   assert(serialized_id.empty());
   serialized_id.reserve(sizeof(id));
   serialized_id.append(reinterpret_cast<const char *>(&id), sizeof(id));
+  return true;
+}
+
+bool StreamUtil::DeserializeStreamID(const std::string &serialized_id, streamID &id) {
+  if (serialized_id.size() != sizeof(id)) {
+    LOG(ERROR) << "Invalid stream id format, failed to parse stream id";
+    return false;
+  }
+  id = *reinterpret_cast<const streamID *>(serialized_id.data());
   return true;
 }
 
@@ -367,6 +370,7 @@ CmdRes StreamUtil::ScanAndAppendMessageToRes(const std::string &skey, const stre
 
     assert(message.size() % 2 == 0);
     res.AppendArrayLen(2);
+    // FIXME: make the stream id readable
     res.AppendString(fv.field);  // field here is the stream id
     res.AppendArrayLenUint64(message.size());
     for (auto &m : message) {
@@ -374,7 +378,6 @@ CmdRes StreamUtil::ScanAndAppendMessageToRes(const std::string &skey, const stre
     }
   }
 
-  res.SetRes(CmdRes::kOk);
   return res;
 }
 
@@ -465,7 +468,8 @@ inline StreamUtil::TrimRet StreamUtil::TrimByMaxlen(StreamMetaValue &stream_meta
     auto cur_batch =
         static_cast<int32_t>(std::min(stream_meta.length() - trim_ret.count - args.maxlen, kDEFAULT_TRIM_BATCH_SIZE));
     std::vector<storage::FieldValue> filed_values;
-    res = StreamUtil::ScanStream(key, stream_meta.first_id(), kSTREAMID_MAX, cur_batch, filed_values, trim_ret.next_field, slot);
+    res = StreamUtil::ScanStream(key, stream_meta.first_id(), kSTREAMID_MAX, cur_batch, filed_values,
+                                 trim_ret.next_field, slot);
     if (!res.ok()) {
       return trim_ret;
     }
@@ -496,8 +500,8 @@ inline StreamUtil::TrimRet StreamUtil::TrimByMinid(StreamMetaValue &stream_meta,
                                                    const StreamAddTrimArgs &args) {
   TrimRet trim_ret;
   std::string min_sid_str;
-  if (!StreamUtil::StreamID2String(stream_meta.first_id(), trim_ret.next_field) ||
-      !StreamUtil::StreamID2String(args.minid, min_sid_str)) {
+  if (!StreamUtil::SerializeStreamID(stream_meta.first_id(), trim_ret.next_field) ||
+      !StreamUtil::SerializeStreamID(args.minid, min_sid_str)) {
     LOG(ERROR) << "Serialize stream id failed";
     res.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
     return trim_ret;
@@ -590,8 +594,8 @@ CmdRes StreamUtil::TrimStream(const std::string &key, StreamAddTrimArgs &args, c
     trim_ret.next_field = trim_ret.max_deleted_field;
   }
   assert(!trim_ret.max_deleted_field.empty());
-  if (!StreamUtil::StreamParseStrictID(trim_ret.next_field, first_id, 0, nullptr).ok() ||
-      !StreamUtil::StreamParseStrictID(trim_ret.max_deleted_field, max_deleted_id, 0, nullptr).ok()) {
+  if (!StreamUtil::DeserializeStreamID(trim_ret.next_field, first_id) ||
+      !StreamUtil::DeserializeStreamID(trim_ret.max_deleted_field, max_deleted_id)) {
     LOG(ERROR) << "Parse stream id failed";
     res.SetRes(CmdRes::kErrOther, "Parse stream id failed");
     return res;
@@ -650,6 +654,7 @@ rocksdb::Status StreamUtil::DeleteTreeNode(const treeID tid, const std::string &
 }
 
 // can be used when delete all the consumer of a cgroup
+// FIXME: what if the memory is not enough to hold all the node?
 rocksdb::Status StreamUtil::GetAllTreeNode(const treeID tid, std::vector<storage::FieldValue> &field_values,
                                            const std::shared_ptr<Slot> &slot) {
   auto key = std::move(TreeID2Key(tid));
