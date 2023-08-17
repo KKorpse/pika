@@ -120,8 +120,8 @@ class StreamUtil {
   // @res: if error occurs, res will be set, otherwise res will be none
   static void ParseAddOrTrimArgsOrRep(CmdRes &res, const PikaCmdArgsType &argv, StreamAddTrimArgs &args, int *idpos,
                                       bool is_xadd);
-  static CmdRes ParseReadOrReadGroupArgs(const PikaCmdArgsType &argv, StreamReadGroupReadArgs &args,
-                                         bool is_xreadgroup);
+  static void ParseReadOrReadGroupArgsOrRep(CmdRes &res, const PikaCmdArgsType &argv, StreamReadGroupReadArgs &args,
+                                            bool is_xreadgroup);
 
   struct TrimRet {
     // the count of deleted messages
@@ -216,7 +216,8 @@ class StreamUtil {
   // @row_ids: if not null, will append the id to it
   static void ScanAndAppendMessageToResOrRep(CmdRes &res, const std::string &skey, const streamID &start_sid,
                                              const streamID &end_sid, int32_t count, const std::shared_ptr<Slot> &slot,
-                                             std::vector<std::string> *row_ids);
+                                             std::vector<std::string> *row_ids, bool start_ex = false,
+                                             bool end_ex = false);
 
   //  private:
   static void StreamGenericParseIDOrRep(CmdRes &res, const std::string &var, streamID &id, uint64_t missing_seq,
@@ -264,20 +265,20 @@ class StreamUtil {
       auto cgroup_tid = stream_meta.groups_id();
       if (cgroup_tid == kINVALID_TREE_ID) {
         LOG(INFO) << "No cgroup found, skip";
-        continue;
+      } else {
+        std::vector<storage::FieldValue> field_values;
+        s = GetAllTreeNode(cgroup_tid, field_values, slot);
+        if (!s.ok() && !s.IsNotFound()) {
+          LOG(ERROR) << "Get all cgroups failed";
+          continue;
+        }
+        // 2.2 loop all the cgroups, and destroy them
+        for (auto &fv : field_values) {
+          StreamUtil::DestoryCGroup(cgroup_tid, fv.field, slot);
+        }
+        // 2.3 delete the cgroup tree
+        StreamUtil::DeleteTree(cgroup_tid, slot);
       }
-      std::vector<storage::FieldValue> field_values;
-      s = GetAllTreeNode(cgroup_tid, field_values, slot);
-      if (!s.ok() && !s.IsNotFound()) {
-        LOG(ERROR) << "Get all cgroups failed";
-        continue;
-      }
-      // 2.2 loop all the cgroups, and destroy them
-      for (auto &fv : field_values) {
-        StreamUtil::DestoryCGroup(cgroup_tid, fv.field, slot);
-      }
-      // 2.3 delete the cgroup tree
-      StreamUtil::DeleteTree(cgroup_tid, slot);
 
       // 3 delete stream meta
       StreamUtil::DeleteStreamMeta(key, slot);

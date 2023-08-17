@@ -197,7 +197,7 @@ void XReadCmd::DoInitial() {
     return;
   }
 
-  res_ = StreamUtil::ParseReadOrReadGroupArgs(argv_, args_, false);
+  StreamUtil::ParseReadOrReadGroupArgsOrRep(res_, argv_, args_, false);
 }
 
 void XReadCmd::Do(std::shared_ptr<Slot> slot) {
@@ -256,7 +256,7 @@ void XReadGroupCmd::DoInitial() {
     return;
   }
 
-  res_ = StreamUtil::ParseReadOrReadGroupArgs(argv_, args_, false);
+  StreamUtil::ParseReadOrReadGroupArgsOrRep(res_, argv_, args_, false);
 }
 
 void XReadGroupCmd::Do(std::shared_ptr<Slot> slot) {
@@ -581,28 +581,26 @@ void XRangeCmd::DoInitial() {
     return;
   }
   key_ = argv_[1];
-  bool start_ex = false;
-  bool end_ex = false;
-  StreamUtil::StreamParseIntervalIdOrRep(res_, argv_[2], start_sid, &start_ex, 0);
+  StreamUtil::StreamParseIntervalIdOrRep(res_, argv_[2], start_sid, &start_ex_, 0);
   if (!res_.none()) {
     return;
   }
-  StreamUtil::StreamParseIntervalIdOrRep(res_, argv_[3], end_sid, &end_ex, UINT64_MAX);
+  StreamUtil::StreamParseIntervalIdOrRep(res_, argv_[3], end_sid, &end_ex_, UINT64_MAX);
   if (!res_.none()) {
     return;
   }
-  if (start_ex && start_sid.ms == UINT64_MAX && start_sid.seq == UINT64_MAX) {
+  if (start_ex_ && start_sid.ms == UINT64_MAX && start_sid.seq == UINT64_MAX) {
     res_.SetRes(CmdRes::kInvalidParameter, "invalid start id");
     return;
   }
-  if (end_ex && end_sid.ms == 0 && end_sid.seq == 0) {
+  if (end_ex_ && end_sid.ms == 0 && end_sid.seq == 0) {
     res_.SetRes(CmdRes::kInvalidParameter, "invalid end id");
     return;
   }
-  if (argv_.size() == 5) {
+  if (argv_.size() == 6) {
     // pika's PKHScanRange() only sopport max count of INT32_MAX
     // but redis supports max count of UINT64_MAX
-    if (!StreamUtil::string2int32(argv_[4].c_str(), count_)) {
+    if (!StreamUtil::string2int32(argv_[5].c_str(), count_)) {
       res_.SetRes(CmdRes::kInvalidParameter, "COUNT should be a integer greater than 0 and not bigger than INT32_MAX");
       return;
     }
@@ -610,8 +608,8 @@ void XRangeCmd::DoInitial() {
 }
 
 void XRangeCmd::Do(std::shared_ptr<Slot> slot) {
-  // FIXME: deal with start_ex and end_ex
-  StreamUtil::ScanAndAppendMessageToResOrRep(res_, key_, start_sid, end_sid, count_, slot, nullptr);
+  // FIXME: deal with start_ex_ and end_ex_
+  StreamUtil::ScanAndAppendMessageToResOrRep(res_, key_, start_sid, end_sid, count_, slot, nullptr, start_ex_, end_ex_);
 }
 
 void XAckCmd::DoInitial() {
