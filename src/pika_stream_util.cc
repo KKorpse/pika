@@ -15,6 +15,7 @@
 #include "include/pika_stream_meta_value.h"
 #include "include/pika_stream_types.h"
 #include "rocksdb/status.h"
+#include "src/coding.h"
 #include "storage/storage.h"
 
 bool StreamUtil::is_stream_meta_hash_created_ = false;
@@ -309,21 +310,6 @@ bool StreamUtil::DeserializeMessage(const std::string &message, std::vector<std:
   return true;
 }
 
-bool StreamUtil::SerializeStreamID(const streamID &id, std::string &serialized_id) {
-  assert(serialized_id.empty());
-  serialized_id.reserve(sizeof(id));
-  serialized_id.append(reinterpret_cast<const char *>(&id), sizeof(id));
-  return true;
-}
-
-bool StreamUtil::DeserializeStreamID(const std::string &serialized_id, streamID &id) {
-  if (serialized_id.size() != sizeof(id)) {
-    return false;
-  }
-  id = *reinterpret_cast<const streamID *>(serialized_id.data());
-  return true;
-}
-
 uint64_t StreamUtil::GetCurrentTimeMs() {
   uint64_t now =
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
@@ -491,12 +477,8 @@ inline StreamUtil::TrimRet StreamUtil::TrimByMinidOrRep(StreamMetaValue &stream_
                                                         const StreamAddTrimArgs &args) {
   TrimRet trim_ret;
   std::string min_sid_str;
-  if (!StreamUtil::SerializeStreamID(stream_meta.first_id(), trim_ret.next_field) ||
-      !StreamUtil::SerializeStreamID(args.minid, min_sid_str)) {
-    LOG(ERROR) << "Serialize stream id failed";
-    res.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
-    return trim_ret;
-  }
+  stream_meta.first_id().SerializeTo(trim_ret.next_field);
+  args.minid.SerializeTo(min_sid_str);
 
   // we delete the message in batchs, prevent from using too much memory
   bool has_change{false};
@@ -566,21 +548,16 @@ int32_t StreamUtil::TrimStreamOrRep(CmdRes &res, StreamMetaValue &stream_meta, c
   streamID max_deleted_id;
   if (stream_meta.length() == trim_ret.count) {
     // all the message in the stream were deleted
-    trim_ret.next_field = trim_ret.max_deleted_field;
+    first_id = kSTREAMID_MIN;
+  } else {
+    first_id.DeserializeFrom(trim_ret.next_field);
   }
-  assert(!trim_ret.max_deleted_field.empty());
+  assert(!trim_ret.max_deleted_field.empty() && !trim_ret.next_field.empty());
+  max_deleted_id.DeserializeFrom(trim_ret.max_deleted_field);
 
-  if (!StreamUtil::DeserializeStreamID(trim_ret.next_field, first_id) ||
-      !StreamUtil::DeserializeStreamID(trim_ret.max_deleted_field, max_deleted_id)) {
-    LOG(ERROR) << "Parse stream id failed";
-    res.SetRes(CmdRes::kErrOther, "Parse stream id failed");
-    return 0;
-  }
   stream_meta.set_first_id(first_id);
   stream_meta.set_max_deleted_entry_id(max_deleted_id);
   stream_meta.set_length(stream_meta.length() - trim_ret.count);
-
-  LOG(INFO) << max_deleted_id.ToString() << ", " << first_id.ToString();
 
   return trim_ret.count;
 }

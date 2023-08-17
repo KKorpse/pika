@@ -16,6 +16,7 @@
 #include "include/pika_stream_types.h"
 #include "rocksdb/metadata.h"
 #include "rocksdb/status.h"
+#include "storage/src/coding.h"
 #include "storage/storage.h"
 
 // get next tree id thread safly
@@ -148,12 +149,6 @@ class StreamUtil {
   // StreamID operator
   //===--------------------------------------------------------------------===//
 
-  // serialize stream id to binary format
-  static bool SerializeStreamID(const streamID &id, std::string &serialized_id);
-
-  // deserialize stream id from binary format
-  static bool DeserializeStreamID(const std::string &serialized_id, streamID &id);
-
   // be used when - and + are acceptable IDs.
   static void StreamParseIDOrRep(CmdRes &res, const std::string &var, streamID &id, uint64_t missing_seq);
 
@@ -168,10 +163,6 @@ class StreamUtil {
   // called in that case.
   static void StreamParseIntervalIdOrRep(CmdRes &res, const std::string &var, streamID &id, bool *exclude,
                                          uint64_t missing_seq);
-
-  // serialize the message to a string, format: {field1.size, field1, value1.size, value1, field2.size, field2, ...}
-  static bool SerializeMessage(const std::vector<std::string> &field_values, std::string &serialized_message,
-                               int field_pos);
 
   //===--------------------------------------------------------------------===//
   // Type convert
@@ -188,6 +179,10 @@ class StreamUtil {
 
   static uint64_t GetCurrentTimeMs();
 
+  // serialize the message to a string, format: {field1.size, field1, value1.size, value1, field2.size, field2, ...}
+  static bool SerializeMessage(const std::vector<std::string> &field_values, std::string &serialized_message,
+                               int field_pos);
+
   static inline void ScanStreamOrRep(CmdRes &res, const std::string &skey, const streamID &start_sid,
                                      const streamID &end_sid, int32_t count,
                                      std::vector<storage::FieldValue> &field_values, std::string &next_field,
@@ -195,15 +190,11 @@ class StreamUtil {
     std::string start_field;
     std::string end_field;
     rocksdb::Slice pattern = "*";  // match all the fields from start_field to end_field
-    if (!StreamUtil::SerializeStreamID(start_sid, start_field)) {
-      LOG(ERROR) << "Serialize stream id failed";
-      res.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
-    }
+    start_sid.SerializeTo(start_field);
     if (end_sid == kSTREAMID_MAX) {
       end_field = "";  // empty for no end_sid
-    } else if (!StreamUtil::SerializeStreamID(end_sid, end_field)) {
-      LOG(ERROR) << "Serialize stream id failed";
-      res.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
+    } else {
+      end_sid.SerializeTo(end_field);
     }
 
     rocksdb::Status s =

@@ -34,7 +34,6 @@ void XAddCmd::GenerateStreamIDOrRep(const StreamMetaValue &stream_meta) {
     if (!args_.id_given) {
       LOG(INFO) << "ID not given, generate ms";
       id.ms = StreamUtil::GetCurrentTimeMs();
-      id.ms = 666;
     }
     // generate seq
     auto last_id = stream_meta.last_id();
@@ -119,11 +118,15 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
     res_.SetRes(CmdRes::kErrOther, "Serialize message failed");
     return;
   }
-  if (!StreamUtil::SerializeStreamID(args_.id, field)) {
-    LOG(ERROR) << "Serialize stream id failed";
-    res_.SetRes(CmdRes::kErrOther, "Serialize stream id failed");
-    return;
-  }
+  args_.id.SerializeTo(field);
+
+  // check the serialized current id is larger than last_id
+#ifdef DEBUG
+  std::string serialized_last_id;
+  stream_meta.last_id().SerializeTo(serialized_last_id);
+  assert(field > serialized_last_id);
+#endif  // DEBUG
+
   s = StreamUtil::InsertStreamMessage(key_, field, value, slot);
   if (!s.ok()) {
     LOG(ERROR) << "Insert stream message failed";
@@ -131,8 +134,8 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
     return;
   }
 
-  // 3 update stream meta, Korpse TODO: is there any arg left to update?
-  if (stream_meta.entries_added() == 0) {
+  // 3 update stream meta
+  if (stream_meta.length() == 0) {
     stream_meta.set_first_id(args_.id);
   }
   stream_meta.set_entries_added(stream_meta.entries_added() + 1);
