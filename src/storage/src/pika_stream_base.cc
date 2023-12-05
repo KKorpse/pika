@@ -3,11 +3,11 @@
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
 
-#include "include/pika_stream_base.h"
+#include "pika_stream_base.h"
 
-#include "include/pika_command.h"
-#include "include/pika_stream_meta_value.h"
-#include "include/pika_stream_types.h"
+// #include "pika_command.h"
+#include "pika_stream_meta_value.h"
+#include "pika_stream_types.h"
 #include "storage/storage.h"
 
 #define GET_NEXT_TREE_ID_AND_CHECK(slot, tid)       \
@@ -19,7 +19,7 @@
     }                                               \
   } while (0)
 
-storage::Status TreeIDGenerator::GetNextTreeID(const Slot *slot, treeID &tid) {
+storage::Status TreeIDGenerator::GetNextTreeID(const rocksdb::DB *db, treeID &tid) {
   assert(slot);
   auto expected_id = kINVALID_TREE_ID;
 
@@ -49,7 +49,7 @@ storage::Status TreeIDGenerator::GetNextTreeID(const Slot *slot, treeID &tid) {
   return slot->db()->HSet(STREAM_META_HASH_KEY, STREAM_LAST_GENERATED_TREE_ID_FIELD, tree_id_str, &res);
 }
 
-storage::Status StreamStorage::GetStreamMeta(StreamMetaValue &stream_meta, const std::string &key, const Slot *slot) {
+storage::Status StreamStorage::GetStreamMeta(StreamMetaValue &stream_meta, const std::string &key, const rocksdb::DB *db) {
   assert(slot);
   std::string value;
   auto s = slot->db()->HGet(STREAM_META_HASH_KEY, key, &value);
@@ -62,7 +62,7 @@ storage::Status StreamStorage::GetStreamMeta(StreamMetaValue &stream_meta, const
 
 // no need to be thread safe, only xadd will call this function
 // and xadd can be locked by the same key using current_key()
-storage::Status StreamStorage::SetStreamMeta(const std::string &key, std::string &meta_value, const Slot *slot) {
+storage::Status StreamStorage::SetStreamMeta(const std::string &key, std::string &meta_value, const rocksdb::DB *db) {
   assert(slot);
   storage::Status s;
   int32_t temp{0};
@@ -71,14 +71,14 @@ storage::Status StreamStorage::SetStreamMeta(const std::string &key, std::string
   return s;
 }
 
-storage::Status StreamStorage::DeleteStreamMeta(const std::string &key, const Slot *slot) {
+storage::Status StreamStorage::DeleteStreamMeta(const std::string &key, const rocksdb::DB *db) {
   assert(slot);
   int32_t ret;
   return slot->db()->HDel({STREAM_META_HASH_KEY}, {key}, &ret);
 }
 
 storage::Status StreamStorage::InsertStreamMessage(const std::string &key, const streamID &id,
-                                                   const std::string &message, const Slot *slot) {
+                                                   const std::string &message, const rocksdb::DB *db) {
   assert(slot);
   std::string true_key = STREAM_DATA_HASH_PREFIX + key;
   int32_t temp{0};
@@ -90,14 +90,14 @@ storage::Status StreamStorage::InsertStreamMessage(const std::string &key, const
 }
 
 storage::Status StreamStorage::GetStreamMessage(const std::string &key, const std::string &sid, std::string &message,
-                                                const Slot *slot) {
+                                                const rocksdb::DB *db) {
   assert(slot);
   std::string true_key = STREAM_DATA_HASH_PREFIX + key;
   return slot->db()->HGet(true_key, sid, &message);
 }
 
 storage::Status StreamStorage::DeleteStreamMessage(const std::string &key, const std::vector<streamID> &id,
-                                                   int32_t &ret, const Slot *slot) {
+                                                   int32_t &ret, const rocksdb::DB *db) {
   assert(slot);
   std::string true_key = STREAM_DATA_HASH_PREFIX + key;
   std::vector<std::string> serialized_ids;
@@ -111,14 +111,14 @@ storage::Status StreamStorage::DeleteStreamMessage(const std::string &key, const
 
 storage::Status StreamStorage::DeleteStreamMessage(const std::string &key,
                                                    const std::vector<std::string> &serialized_ids, int32_t &ret,
-                                                   const Slot *slot) {
+                                                   const rocksdb::DB *db) {
   assert(slot);
   std::string true_key = STREAM_DATA_HASH_PREFIX + key;
   return slot->db()->HDel(true_key, {serialized_ids}, &ret);
 }
 
 storage::Status StreamStorage::ScanStream(const ScanStreamOptions &op, std::vector<storage::FieldValue> &field_values,
-                                          std::string &next_field, const Slot *slot) {
+                                          std::string &next_field, const rocksdb::DB *db) {
   assert(slot);
   std::string start_field;
   std::string end_field;
@@ -165,7 +165,7 @@ storage::Status StreamStorage::ScanStream(const ScanStreamOptions &op, std::vect
   return s;
 }
 
-storage::Status StreamStorage::DeleteStreamData(const std::string &key, const Slot *slot) {
+storage::Status StreamStorage::DeleteStreamData(const std::string &key, const rocksdb::DB *db) {
   assert(slot);
   std::string true_key = STREAM_DATA_HASH_PREFIX + key;
   std::map<storage::DataType, storage::Status> type_status;
@@ -175,7 +175,7 @@ storage::Status StreamStorage::DeleteStreamData(const std::string &key, const Sl
 }
 
 storage::Status StreamStorage::GetTreeNodeValue(const treeID tid, std::string &field, std::string &value,
-                                                const Slot *slot) {
+                                                const rocksdb::DB *db) {
   assert(slot);
   auto key = std::move(StreamUtils::TreeID2Key(tid));
   storage::Status s;
@@ -184,7 +184,7 @@ storage::Status StreamStorage::GetTreeNodeValue(const treeID tid, std::string &f
 }
 
 storage::Status StreamStorage::InsertTreeNodeValue(const treeID tid, const std::string &filed, const std::string &value,
-                                                   const Slot *slot) {
+                                                   const rocksdb::DB *db) {
   assert(slot);
   auto key = std::move(StreamUtils::TreeID2Key(tid));
 
@@ -195,7 +195,7 @@ storage::Status StreamStorage::InsertTreeNodeValue(const treeID tid, const std::
   return s;
 }
 
-storage::Status StreamStorage::DeleteTreeNode(const treeID tid, const std::string &field, const Slot *slot) {
+storage::Status StreamStorage::DeleteTreeNode(const treeID tid, const std::string &field, const rocksdb::DB *db) {
   assert(slot);
   auto key = std::move(StreamUtils::TreeID2Key(tid));
 
@@ -207,13 +207,13 @@ storage::Status StreamStorage::DeleteTreeNode(const treeID tid, const std::strin
 }
 
 storage::Status StreamStorage::GetAllTreeNode(const treeID tid, std::vector<storage::FieldValue> &field_values,
-                                              const Slot *slot) {
+                                              const rocksdb::DB *db) {
   assert(slot);
   auto key = std::move(StreamUtils::TreeID2Key(tid));
   return slot->db()->PKHScanRange(key, "", "", "*", INT_MAX, &field_values, nullptr);
 }
 
-storage::Status StreamStorage::DeleteTree(const treeID tid, const Slot *slot) {
+storage::Status StreamStorage::DeleteTree(const treeID tid, const rocksdb::DB *db) {
   assert(slot);
   assert(tid != kINVALID_TREE_ID);
   storage::Status s;
@@ -224,7 +224,7 @@ storage::Status StreamStorage::DeleteTree(const treeID tid, const Slot *slot) {
   return s;
 }
 
-storage::Status StreamStorage::CreateConsumer(treeID consumer_tid, std::string &consumername, const Slot *slot) {
+storage::Status StreamStorage::CreateConsumer(treeID consumer_tid, std::string &consumername, const rocksdb::DB *db) {
   assert(slot);
   std::string consumer_meta_value;
   auto s = StreamStorage::GetTreeNodeValue(consumer_tid, consumername, consumer_meta_value, slot);
@@ -244,7 +244,7 @@ storage::Status StreamStorage::CreateConsumer(treeID consumer_tid, std::string &
   return s;
 }
 
-storage::Status StreamStorage::GetOrCreateConsumer(treeID consumer_tid, std::string &consumername, const Slot *slot,
+storage::Status StreamStorage::GetOrCreateConsumer(treeID consumer_tid, std::string &consumername, const rocksdb::DB *db,
                                                    StreamConsumerMetaValue &consumer_meta) {
   assert(slot);
   std::string consumer_meta_value;
@@ -336,7 +336,7 @@ bool StreamUtils::StreamParseIntervalId(const std::string &var, streamID &id, bo
 }
 
 storage::Status StreamStorage::TrimByMaxlen(TrimRet &trim_ret, StreamMetaValue &stream_meta, const std::string &key,
-                                            const Slot *slot, const StreamAddTrimArgs &args) {
+                                            const rocksdb::DB *db, const StreamAddTrimArgs &args) {
   assert(slot);
   storage::Status s;
   // we delete the message in batchs, prevent from using too much memory
@@ -375,7 +375,7 @@ storage::Status StreamStorage::TrimByMaxlen(TrimRet &trim_ret, StreamMetaValue &
 }
 
 storage::Status StreamStorage::TrimByMinid(TrimRet &trim_ret, StreamMetaValue &stream_meta, const std::string &key,
-                                           const Slot *slot, const StreamAddTrimArgs &args) {
+                                           const rocksdb::DB *db, const StreamAddTrimArgs &args) {
   assert(slot);
   storage::Status s;
   std::string serialized_min_id;
@@ -384,7 +384,8 @@ storage::Status StreamStorage::TrimByMinid(TrimRet &trim_ret, StreamMetaValue &s
 
   // we delete the message in batchs, prevent from using too much memory
   while (trim_ret.next_field < serialized_min_id && stream_meta.length() - trim_ret.count > 0) {
-    auto cur_batch = static_cast<int32_t>(std::min(static_cast<int32_t>(stream_meta.length() - trim_ret.count), kDEFAULT_TRIM_BATCH_SIZE));
+    auto cur_batch = static_cast<int32_t>(
+        std::min(static_cast<int32_t>(stream_meta.length() - trim_ret.count), kDEFAULT_TRIM_BATCH_SIZE));
     std::vector<storage::FieldValue> filed_values;
 
     StreamStorage::ScanStreamOptions options(key, stream_meta.first_id(), args.minid, cur_batch, false, false, false);
@@ -427,7 +428,7 @@ storage::Status StreamStorage::TrimByMinid(TrimRet &trim_ret, StreamMetaValue &s
 }
 
 storage::Status StreamStorage::TrimStream(int32_t &count, StreamMetaValue &stream_meta, const std::string &key,
-                                          StreamAddTrimArgs &args, const Slot *slot) {
+                                          StreamAddTrimArgs &args, const rocksdb::DB *db) {
   assert(slot);
   count = 0;
   // 1 do the trim
@@ -472,7 +473,7 @@ storage::Status StreamStorage::TrimStream(int32_t &count, StreamMetaValue &strea
   return s;
 }
 
-storage::Status StreamStorage::DestoryStreams(std::vector<std::string> &keys, const Slot *slot) {
+storage::Status StreamStorage::DestoryStreams(std::vector<std::string> &keys, const rocksdb::DB *db) {
   assert(slot);
   storage::Status s;
   for (const auto &key : keys) {
