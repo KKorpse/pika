@@ -17,10 +17,10 @@
  * stream
  */
 
-inline void ParseAddOrTrimArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv, StreamAddTrimArgs& args, int* idpos,
+inline void ParseAddOrTrimArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv, storage::Storage::StreamAddTrimArgs& args, int* idpos,
                                       bool is_xadd);
 
-inline void ParseReadOrReadGroupArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv, StreamReadGroupReadArgs& args,
+inline void ParseReadOrReadGroupArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv, storage::Storage::StreamReadGroupReadArgs& args,
                                             bool is_xreadgroup);
 
 // @field_values is the result of ScanStream.
@@ -39,11 +39,10 @@ class XAddCmd : public Cmd {
 
  private:
   std::string key_;
-  StreamAddTrimArgs args_;
+  storage::Storage::StreamAddTrimArgs args_;
   int field_pos_{0};
 
   void DoInitial() override;
-  inline void GenerateStreamIDOrReply(const StreamMetaValue& stream_meta);
 };
 
 class XDelCmd : public Cmd {
@@ -57,7 +56,7 @@ class XDelCmd : public Cmd {
 
  private:
   std::string key_;
-  std::vector<streamID> ids_;
+  std::vector<storage::streamID> ids_;
 
   void DoInitial() override;
   void Clear() override { ids_.clear(); }

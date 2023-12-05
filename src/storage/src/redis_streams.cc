@@ -8,6 +8,7 @@
 #include "src/pika_stream_meta_value.h"
 #include "src/scope_record_lock.h"
 #include "src/scope_snapshot.h"
+#include "storage/storage.h"
 #include "storage/util.h"
 
 namespace storage {
@@ -295,6 +296,280 @@ Status RedisStreams::TTL(const Slice& key, int64_t* timestamp) {
   TRACE(FATAL, "RedisStreams::TTL not supported by stream");
   rocksdb::Status s(rocksdb::Status::NotSupported("RedisStreams::TTL not supported by stream"));
   return Status::Corruption(s.ToString());
+}
+
+storage::Status RedisStreams::GetStreamMeta(StreamMetaValue& stream_meta, const rocksdb::Slice& key) {
+  std::string value;
+  auto s = db_->Get(default_read_options_, handles_[0], key, &value);
+  if (s.ok()) {
+    stream_meta.ParseFrom(value);
+    return storage::Status::OK();
+  }
+  return s;
+}
+
+storage::Status RedisStreams::SetStreamMeta(const rocksdb::Slice& key, std::string& meta_value) {
+  return db_->Put(default_write_options_, handles_[0], key, meta_value);
+}
+
+storage::Status RedisStreams::InsertStreamMessage(const rocksdb::Slice& key, const streamID& id,
+                                                  const std::string& message) {
+  return db_->Put(default_write_options_, handles_[1], key, message);
+}
+
+storage::Status RedisStreams::GetStreamMessage(const rocksdb::Slice& key, const std::string& sid,
+                                               std::string& message) {
+  return db_->Get(default_read_options_, handles_[1], key, &message);
+}
+
+storage::Status RedisStreams::DeleteStreamMessage(const rocksdb::Slice& key, const std::vector<streamID>& id) {
+  rocksdb::WriteBatch batch;
+  for (auto& sid : id) {
+    std::string serialized_id;
+    sid.SerializeTo(serialized_id);
+    batch.Delete(handles_[1], serialized_id);
+  }
+  return db_->Write(default_write_options_, &batch);
+}
+
+storage::Status RedisStreams::DeleteStreamMessage(const rocksdb::Slice& key,
+                                                  const std::vector<std::string>& serialized_ids) {
+  rocksdb::WriteBatch batch;
+  for (auto& sid : serialized_ids) {
+    batch.Delete(handles_[1], sid);
+  }
+  return db_->Write(default_write_options_, &batch);
+}
+
+storage::Status RedisStreams::TrimStream(int32_t& count, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
+                                         Storage::StreamAddTrimArgs& args) {
+  count = 0;
+  // 1 do the trim
+  TrimRet trim_ret;
+  storage::Status s;
+  if (args.trim_strategy == StreamTrimStrategy::TRIM_STRATEGY_MAXLEN) {
+    s = TrimByMaxlen(trim_ret, stream_meta, key, args);
+  } else {
+    assert(args.trim_strategy == StreamTrimStrategy::TRIM_STRATEGY_MINID);
+    s = TrimByMinid(trim_ret, stream_meta, key, args);
+  }
+
+  if (!s.ok()) {
+    return s;
+  }
+
+  if (trim_ret.count == 0) {
+    return s;
+  }
+
+  // 2 update stream meta
+  streamID first_id;
+  streamID max_deleted_id;
+  if (stream_meta.length() == trim_ret.count) {
+    // all the message in the stream were deleted
+    first_id = kSTREAMID_MIN;
+  } else {
+    first_id.DeserializeFrom(trim_ret.next_field);
+  }
+  assert(!trim_ret.max_deleted_field.empty());
+  max_deleted_id.DeserializeFrom(trim_ret.max_deleted_field);
+
+  stream_meta.set_first_id(first_id);
+  if (max_deleted_id > stream_meta.max_deleted_entry_id()) {
+    stream_meta.set_max_deleted_entry_id(max_deleted_id);
+  }
+  stream_meta.set_length(stream_meta.length() - trim_ret.count);
+
+  count = trim_ret.count;
+
+  s = storage::Status::OK();
+  return s;
+}
+
+storage::Status RedisStreams::ScanStream(const ScanStreamOptions& op, std::vector<storage::FieldValue>& field_values,
+                                         std::string& next_field) {
+  std::string start_field;
+  std::string end_field;
+  storage::Slice pattern = "*";  // match all the fields from start_field to end_field
+  storage::Status s;
+
+  // 1 do the scan
+  if (op.is_reverse) {
+    op.end_sid.SerializeTo(start_field);
+    if (op.start_sid == kSTREAMID_MAX) {
+      start_field = "";
+    } else {
+      op.start_sid.SerializeTo(start_field);
+    }
+    s = db->PKHRScanRange(true_key, start_field, end_field, pattern, op.count, &field_values, &next_field);
+  } else {
+    op.start_sid.SerializeTo(start_field);
+    if (op.end_sid == kSTREAMID_MAX) {
+      end_field = "";
+    } else {
+      op.end_sid.SerializeTo(end_field);
+    }
+    s = db->PKHScanRange(true_key, start_field, end_field, pattern, op.count, &field_values, &next_field);
+  }
+
+  // 2 exclude the start_sid and end_sid if needed
+  if (op.start_ex && !field_values.empty()) {
+    streamID sid;
+    sid.DeserializeFrom(field_values.front().field);
+    if (sid == op.start_sid) {
+      field_values.erase(field_values.begin());
+    }
+  }
+
+  if (op.end_ex && !field_values.empty()) {
+    streamID sid;
+    sid.DeserializeFrom(field_values.back().field);
+    if (sid == op.end_sid) {
+      field_values.pop_back();
+    }
+  }
+
+  return s;
+}
+
+// FIXME: CHECK
+storage::Status RedisStreams::DeleteStreamData(const rocksdb::Slice& key) {
+  return db_->Delete(default_write_options_, handles_[1], key);
+}
+
+Status RedisStreams::GenerateStreamID(const StreamMetaValue& stream_meta, Storage::StreamAddTrimArgs& args) {
+  auto& id = args.id;
+  if (args.id_given && args.seq_given && id.ms == 0 && id.seq == 0) {
+    return Status::InvalidArgument("The ID specified in XADD must be greater than 0-0");
+  }
+
+  if (!args.id_given || !args.seq_given) {
+    // if id not given, generate one
+    if (!args.id_given) {
+      id.ms = StreamUtils::GetCurrentTimeMs();
+
+      if (id.ms < stream_meta.last_id().ms) {
+        id.ms = stream_meta.last_id().ms;
+        if (stream_meta.last_id().seq == UINT64_MAX) {
+          id.ms++;
+          id.seq = 0;
+        } else {
+          id.seq++;
+        }
+        return Status::OK();
+      }
+    }
+
+    // generate seq
+    auto last_id = stream_meta.last_id();
+    if (id.ms < last_id.ms) {
+      LOG(ERROR) << "Time backwards detected !";
+      return Status::InvalidArgument("The ID specified in XADD is equal or smaller");
+    } else if (id.ms == last_id.ms) {
+      if (last_id.seq == UINT64_MAX) {
+        return Status::InvalidArgument("The ID specified in XADD is equal or smaller");
+      }
+      id.seq = last_id.seq + 1;
+    } else {
+      id.seq = 0;
+    }
+
+  } else {
+    //  Full ID given, check id
+    auto last_id = stream_meta.last_id();
+    if (id.ms < last_id.ms || (id.ms == last_id.ms && id.seq <= last_id.seq)) {
+      return Status::InvalidArgument("INVALID ID given");
+    }
+  }
+}
+
+storage::Status RedisStreams::TrimByMaxlen(TrimRet& trim_ret, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
+                                           const Storage::StreamAddTrimArgs& args) {
+  storage::Status s;
+  // we delete the message in batchs, prevent from using too much memory
+  while (stream_meta.length() - trim_ret.count > args.maxlen) {
+    auto cur_batch =
+        (std::min(static_cast<int32_t>(stream_meta.length() - trim_ret.count - args.maxlen), kDEFAULT_TRIM_BATCH_SIZE));
+    std::vector<storage::FieldValue> filed_values;
+
+    RedisStreams::ScanStreamOptions options(key, stream_meta.first_id(), kSTREAMID_MAX, cur_batch, false, false, false);
+    s = RedisStreams::ScanStream(options, filed_values, trim_ret.next_field);
+    if (!s.ok() && !s.IsNotFound()) {
+      return s;
+    }
+
+    assert(filed_values.size() == cur_batch);
+    trim_ret.count += cur_batch;
+    trim_ret.max_deleted_field = filed_values.back().field;
+
+    // delete the message in batchs
+    std::vector<std::string> fields_to_del;
+    fields_to_del.reserve(filed_values.size());
+    for (auto& fv : filed_values) {
+      fields_to_del.emplace_back(std::move(fv.field));
+    }
+    int32_t ret;
+    s = DeleteStreamMessage(key, fields_to_del);
+    if (!s.ok()) {
+      return s;
+    }
+    assert(ret == fields_to_del.size());
+  }
+
+  s = storage::Status::OK();
+  return s;
+}
+
+storage::Status RedisStreams::TrimByMinid(TrimRet& trim_ret, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
+                                          const Storage::StreamAddTrimArgs& args) {
+  storage::Status s;
+  std::string serialized_min_id;
+  stream_meta.first_id().SerializeTo(trim_ret.next_field);
+  args.minid.SerializeTo(serialized_min_id);
+
+  // we delete the message in batchs, prevent from using too much memory
+  while (trim_ret.next_field < serialized_min_id && stream_meta.length() - trim_ret.count > 0) {
+    auto cur_batch = static_cast<int32_t>(
+        std::min(static_cast<int32_t>(stream_meta.length() - trim_ret.count), kDEFAULT_TRIM_BATCH_SIZE));
+    std::vector<storage::FieldValue> filed_values;
+
+    RedisStreams::ScanStreamOptions options(key, stream_meta.first_id(), args.minid, cur_batch, false, false, false);
+    s = RedisStreams::ScanStream(options, filed_values, trim_ret.next_field);
+    if (!s.ok() && !s.IsNotFound()) {
+      return s;
+    }
+
+    if (!filed_values.empty()) {
+      if (filed_values.back().field == serialized_min_id) {
+        // we do not need to delete the message that it's id matches the minid
+        filed_values.pop_back();
+        trim_ret.next_field = serialized_min_id;
+      }
+      // duble check
+      if (!filed_values.empty()) {
+        trim_ret.max_deleted_field = filed_values.back().field;
+      }
+    }
+
+    assert(filed_values.size() <= cur_batch);
+    trim_ret.count += static_cast<int32_t>(filed_values.size());
+
+    // do the delete in batch
+    std::vector<std::string> fields_to_del;
+    fields_to_del.reserve(filed_values.size());
+    for (auto& fv : filed_values) {
+      fields_to_del.emplace_back(std::move(fv.field));
+    }
+    int32_t ret;
+    s = DeleteStreamMessage(key, fields_to_del);
+    if (!s.ok()) {
+      return s;
+    }
+    assert(ret == fields_to_del.size());
+  }
+
+  s = storage::Status::OK();
+  return s;
 }
 
 };  // namespace storage

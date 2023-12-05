@@ -28,22 +28,6 @@ static const std::string STREAM_LAST_GENERATED_TREE_ID_FIELD = "STREAM";
 // kDEFAULT_TRIM_BATCH_SIZE) times
 const static int32_t kDEFAULT_TRIM_BATCH_SIZE = 1000;
 
-struct StreamAddTrimArgs {
-  // XADD options
-  streamID id;
-  bool id_given{false};
-  bool seq_given{false};
-  bool no_mkstream{false};
-
-  // XADD + XTRIM common options
-  StreamTrimStrategy trim_strategy{TRIM_STRATEGY_NONE};
-  int trim_strategy_arg_idx{0};
-
-  // TRIM_STRATEGY_MAXLEN options
-  uint64_t maxlen{0};
-  streamID minid;
-};
-
 struct StreamReadGroupReadArgs {
   // XREAD + XREADGROUP common options
   std::vector<std::string> keys;

@@ -8,9 +8,9 @@
 
 #include "include/pika_command.h"
 #include "include/pika_slot.h"
-#include "include/pika_stream_base.h"
-#include "include/pika_stream_meta_value.h"
-#include "include/pika_stream_types.h"
+#include "storage/src/pika_stream_base.h"
+#include "storage/src/pika_stream_meta_value.h"
+#include "storage/src/pika_stream_types.h"
 #include "storage/storage.h"
 
 // s : rocksdb::Status
@@ -24,7 +24,7 @@
     }                                              \
   } while (0)
 
-void ParseAddOrTrimArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, StreamAddTrimArgs &args, int *idpos,
+void ParseAddOrTrimArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, storage::StreamAddTrimArgs &args, int *idpos,
                                bool is_xadd) {
   int i = 2;
   bool limit_given = false;
@@ -38,7 +38,7 @@ void ParseAddOrTrimArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, StreamA
 
     } else if (strcasecmp(opt.c_str(), "maxlen") == 0 && moreargs) {
       // case: XADD mystream ... MAXLEN [= | ~] threshold ...
-      if (args.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
+      if (args.trim_strategy != storage::StreamTrimStrategy::TRIM_STRATEGY_NONE) {
         res.SetRes(CmdRes::kSyntaxErr, "syntax error, MAXLEN and MINID options at the same time are not compatible");
         return;
       }
@@ -48,16 +48,16 @@ void ParseAddOrTrimArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, StreamA
         i++;
       }
       // parse threshold as uint64
-      if (!StreamUtils::string2uint64(argv[i + 1].c_str(), args.maxlen)) {
+      if (!storage::StreamUtils::string2uint64(argv[i + 1].c_str(), args.maxlen)) {
         res.SetRes(CmdRes::kInvalidParameter, "Invalid MAXLEN argument");
       }
       i++;
-      args.trim_strategy = StreamTrimStrategy::TRIM_STRATEGY_MAXLEN;
+      args.trim_strategy = storage::StreamTrimStrategy::TRIM_STRATEGY_MAXLEN;
       args.trim_strategy_arg_idx = i;
 
     } else if (strcasecmp(opt.c_str(), "minid") == 0 && moreargs) {
       // case: XADD mystream ... MINID [= | ~] threshold ...
-      if (args.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
+      if (args.trim_strategy != storage::StreamTrimStrategy::TRIM_STRATEGY_NONE) {
         res.SetRes(CmdRes::kSyntaxErr, "syntax error, MAXLEN and MINID options at the same time are not compatible");
         return;
       }
@@ -67,12 +67,12 @@ void ParseAddOrTrimArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, StreamA
         i++;
       }
       // parse threshold as stremID
-      if (!StreamUtils::StreamParseID(argv[i + 1], args.minid, 0)) {
+      if (!storage::StreamUtils::StreamParseID(argv[i + 1], args.minid, 0)) {
         res.SetRes(CmdRes::kInvalidParameter, "Invalid stream ID specified as stream ");
         return;
       }
       i++;
-      args.trim_strategy = StreamTrimStrategy::TRIM_STRATEGY_MINID;
+      args.trim_strategy = storage::StreamTrimStrategy::TRIM_STRATEGY_MINID;
       args.trim_strategy_arg_idx = i;
 
     } else if (strcasecmp(opt.c_str(), "limit") == 0 && moreargs) {
@@ -87,7 +87,7 @@ void ParseAddOrTrimArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, StreamA
 
     } else if (is_xadd) {
       // case: XADD mystream ... ID ...
-      if (!StreamUtils::StreamParseStrictID(argv[i], args.id, 0, &args.seq_given)) {
+      if (!storage::StreamUtils::StreamParseStrictID(argv[i], args.id, 0, &args.seq_given)) {
         res.SetRes(CmdRes::kInvalidParameter, "Invalid stream ID specified as stream ");
         return;
       }
@@ -110,7 +110,7 @@ void ParseAddOrTrimArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, StreamA
  * [NOACK] STREAMS key [key ...] id [id ...]
  * XREAD [COUNT count] [BLOCK milliseconds] STREAMS key [key ...] id
  * [id ...] */
-void ParseReadOrReadGroupArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, StreamReadGroupReadArgs &args,
+void ParseReadOrReadGroupArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, storage::StreamReadGroupReadArgs &args,
                                      bool is_xreadgroup) {
   int streams_arg_idx{0};  // the index of stream keys arg
   size_t streams_cnt{0};   // the count of stream keys
@@ -120,13 +120,13 @@ void ParseReadOrReadGroupArgsOrReply(CmdRes &res, const PikaCmdArgsType &argv, S
     const std::string &o = argv[i];
     if (strcasecmp(o.c_str(), "BLOCK") == 0 && moreargs) {
       i++;
-      if (!StreamUtils::string2uint64(argv[i].c_str(), args.block)) {
+      if (!storage::StreamUtils::string2uint64(argv[i].c_str(), args.block)) {
         res.SetRes(CmdRes::kInvalidParameter, "Invalid BLOCK argument");
         return;
       }
     } else if (strcasecmp(o.c_str(), "COUNT") == 0 && moreargs) {
       i++;
-      if (!StreamUtils::string2int32(argv[i].c_str(), args.count)) {
+      if (!storage::StreamUtils::string2int32(argv[i].c_str(), args.count)) {
         res.SetRes(CmdRes::kInvalidParameter, "Invalid COUNT argument");
         return;
       }
@@ -184,7 +184,7 @@ void AppendMessagesToRes(CmdRes &res, std::vector<storage::FieldValue> &field_va
   res.AppendArrayLenUint64(field_values.size());
   for (auto &fv : field_values) {
     std::vector<std::string> message;
-    if (!StreamUtils::DeserializeMessage(fv.value, message)) {
+    if (!storage::StreamUtils::DeserializeMessage(fv.value, message)) {
       LOG(ERROR) << "Deserialize message failed";
       res.SetRes(CmdRes::kErrOther, "Deserialize message failed");
       return;
@@ -192,7 +192,7 @@ void AppendMessagesToRes(CmdRes &res, std::vector<storage::FieldValue> &field_va
 
     assert(message.size() % 2 == 0);
     res.AppendArrayLen(2);
-    streamID sid;
+    storage::streamID sid;
     sid.DeserializeFrom(fv.field);
     res.AppendString(sid.ToString());  // field here is the stream id
     res.AppendArrayLenUint64(message.size());
@@ -209,11 +209,7 @@ void XAddCmd::DoInitial() {
   }
   key_ = argv_[1];
 
-  // check the conflict of stream used prefix, see detail in defination of STREAM_TREE_PREFIX
-  if (key_ == STREAM_LAST_GENERATED_TREE_ID_FIELD) {
-    res_.SetRes(CmdRes::kErrOther, "Can not use " + STREAM_LAST_GENERATED_TREE_ID_FIELD + "as stream key");
-    return;
-  }
+  // FIXME: check the conflict of stream used prefix, see detail in defination of STERAM_TREE_PREFIX
 
   int idpos{-1};
   ParseAddOrTrimArgsOrReply(res_, argv_, args_, &idpos, true);
@@ -233,29 +229,15 @@ void XAddCmd::DoInitial() {
 }
 
 void XAddCmd::Do(std::shared_ptr<Slot> slot) {
-  // 1 get stream meta
-  rocksdb::Status s;
-  StreamMetaValue stream_meta;
-  s = StreamStorage::GetStreamMeta(stream_meta, key_, slot.get());
-  if (s.IsNotFound() && args_.no_mkstream) {
-    res_.SetRes(CmdRes::kNotFound);
-    return;
-  } else if (s.IsNotFound()) {
-    stream_meta.Init();
-  } else if (!s.ok()) {
-    res_.SetRes(CmdRes::kErrOther, "error from XADD, get stream meta failed: " + s.ToString());
+  std::string message;
+  if (!storage::StreamUtils::SerializeMessage(argv_, message, field_pos_)) {
+    res_.SetRes(CmdRes::kErrOther, "Serialize message failed");
     return;
   }
 
-  if (stream_meta.last_id().ms == UINT64_MAX && stream_meta.last_id().seq == UINT64_MAX) {
-    LOG(ERROR) << "Fatal! Sequence number overflow !";
-    res_.SetRes(CmdRes::kErrOther, "Fatal! Sequence number overflow !");
-    return;
-  }
-
-  // 2 append the message to storage
-  GenerateStreamIDOrReply(stream_meta);
-  if (res_.ret() != CmdRes::kNone) {
+  auto s = slot->db()->XADD(key_, message, args_);
+  if (!s.ok()) {
+    res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
   }
 
@@ -265,98 +247,7 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
     argv_[field_pos_ - 1] = args_.id.ToString();
   }
 
-  std::string message;
-  if (!StreamUtils::SerializeMessage(argv_, message, field_pos_)) {
-    res_.SetRes(CmdRes::kErrOther, "Serialize message failed");
-    return;
-  }
-
-  // check the serialized current id is larger than last_id
-#ifdef DEBUG
-  std::string serialized_last_id;
-  stream_meta.last_id().SerializeTo(serialized_last_id);
-  assert(field > serialized_last_id);
-#endif  // DEBUG
-
-  s = StreamStorage::InsertStreamMessage(key_, args_.id, message, slot.get());
-  if (!s.ok()) {
-    res_.SetRes(CmdRes::kErrOther, "error from XADD, insert stream message failed 1: " + s.ToString());
-    return;
-  }
-
-  // 3 update stream meta
-  if (stream_meta.length() == 0) {
-    stream_meta.set_first_id(args_.id);
-  }
-  stream_meta.set_entries_added(stream_meta.entries_added() + 1);
-  stream_meta.set_last_id(args_.id);
-  stream_meta.set_length(stream_meta.length() + 1);
-
-  // 4 trim the stream if needed
-  if (args_.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
-    int32_t count;
-    TRY_CATCH_ERROR(StreamStorage::TrimStream(count, stream_meta, key_, args_, slot.get()), res_);
-    (void)count;
-  }
-
-  // 5 update stream meta
-  s = StreamStorage::SetStreamMeta(key_, stream_meta.value(), slot.get());
-  if (!s.ok()) {
-    res_.SetRes(CmdRes::kErrOther, "error from XADD, get stream meta failed 2: " + s.ToString());
-    return;
-  }
-
   res_.AppendString(args_.id.ToString());
-}
-
-void XAddCmd::GenerateStreamIDOrReply(const StreamMetaValue &stream_meta) {
-  auto &id = args_.id;
-  if (args_.id_given && args_.seq_given && id.ms == 0 && id.seq == 0) {
-    res_.SetRes(CmdRes::kInvalidParameter, "The ID specified in XADD must be greater than 0-0");
-    return;
-  }
-
-  if (!args_.id_given || !args_.seq_given) {
-    // if id not given, generate one
-    if (!args_.id_given) {
-      id.ms = StreamUtils::GetCurrentTimeMs();
-
-      if (id.ms < stream_meta.last_id().ms) {
-        id.ms = stream_meta.last_id().ms;
-        if (stream_meta.last_id().seq == UINT64_MAX) {
-          id.ms++;
-          id.seq = 0;
-        } else {
-          id.seq++;
-        }
-        return;
-      }
-    }
-
-    // generate seq
-    auto last_id = stream_meta.last_id();
-    if (id.ms < last_id.ms) {
-      LOG(ERROR) << "Time backwards detected !";
-      res_.SetRes(CmdRes::kErrOther, "The ID specified in XADD is equal or smaller");
-      return;
-    } else if (id.ms == last_id.ms) {
-      if (last_id.seq == UINT64_MAX) {
-        res_.SetRes(CmdRes::kErrOther, "The ID specified in XADD is equal or smaller");
-        return;
-      }
-      id.seq = last_id.seq + 1;
-    } else {
-      id.seq = 0;
-    }
-
-  } else {
-    //  Full ID given, check id
-    auto last_id = stream_meta.last_id();
-    if (id.ms < last_id.ms || (id.ms == last_id.ms && id.seq <= last_id.seq)) {
-      res_.SetRes(CmdRes::kErrOther, "INVALID ID given");
-      return;
-    }
-  }
 }
 
 void XRangeCmd::DoInitial() {
