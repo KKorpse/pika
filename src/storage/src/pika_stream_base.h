@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include "include/storage/storage.h"
 #include "pika_stream_meta_value.h"
 #include "pika_stream_types.h"
@@ -57,6 +58,15 @@ struct StreamReadGroupReadArgs {
   bool noack_{false};
 };
 
+struct StreamScanArgs {
+  streamID start_sid;
+  streamID end_sid;
+  size_t count{0};
+  bool start_ex{false};    // exclude first message
+  bool end_ex{false};      // exclude last message
+  bool is_reverse{false};  // scan in reverse order
+};
+
 // get next tree id thread safe
 class TreeIDGenerator {
  private:
@@ -83,25 +93,6 @@ class TreeIDGenerator {
 // if we want to change the storage engine, we need to rewrite this class.
 class StreamStorage {
  public:
-  struct ScanStreamOptions {
-    rocksdb::Slice key;  // the key of the stream
-    streamID start_sid;
-    streamID end_sid;
-    int32_t count;
-    bool start_ex;    // exclude first message
-    bool end_ex;      // exclude last message
-    bool is_reverse;  // scan in reverse order
-    ScanStreamOptions(rocksdb::Slice skey, streamID start_sid, streamID end_sid, int32_t count, bool start_ex = false,
-                      bool end_ex = false, bool is_reverse = false)
-        : key(skey),
-          start_sid(start_sid),
-          end_sid(end_sid),
-          count(count),
-          start_ex(start_ex),
-          end_ex(end_ex),
-          is_reverse(is_reverse) {}
-  };
-
   static storage::Status ScanStream(const ScanStreamOptions &option, std::vector<storage::FieldValue> &field_values,
                                     std::string &next_field, const rocksdb::DB *db);
 

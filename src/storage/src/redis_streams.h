@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include "include/storage/storage.h"
 #include "pika_stream_base.h"
 #include "pika_stream_meta_value.h"
@@ -23,6 +24,11 @@ class RedisStreams : public Redis {
   //===--------------------------------------------------------------------===//
   Status XADD(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
   Status XDEL(const Slice& key, const std::vector<streamID>& ids, size_t& count);
+  Status XTRIM(const Slice& key, StreamAddTrimArgs& args, size_t& count);
+  Status Xrange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
+  Status XRevrange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
+  Status XLen(const Slice& key, size_t& len);
+  Status XRead(const StreamReadGroupReadArgs& args, std::vector<std::vector<storage::FieldValue>>& results);
 
   //===--------------------------------------------------------------------===//
   // Common Commands
@@ -75,17 +81,17 @@ class RedisStreams : public Redis {
 
   Status DeleteStreamData(const rocksdb::Slice& key);
 
-  Status TrimStream(int32_t& count, StreamMetaValue& stream_meta, const rocksdb::Slice& key, StreamAddTrimArgs& args,
+  Status TrimStream(size_t& count, StreamMetaValue& stream_meta, const rocksdb::Slice& key, StreamAddTrimArgs& args,
                     rocksdb::ReadOptions& read_options);
   struct ScanStreamOptions {
     const rocksdb::Slice key;  // the key of the stream
     streamID start_sid;
     streamID end_sid;
-    int32_t count;
+    size_t count;
     bool start_ex;    // exclude first message
     bool end_ex;      // exclude last message
     bool is_reverse;  // scan in reverse order
-    ScanStreamOptions(const rocksdb::Slice skey, streamID start_sid, streamID end_sid, int32_t count,
+    ScanStreamOptions(const rocksdb::Slice skey, streamID start_sid, streamID end_sid, size_t count,
                       bool start_ex = false, bool end_ex = false, bool is_reverse = false)
         : key(skey),
           start_sid(start_sid),
@@ -111,7 +117,7 @@ class RedisStreams : public Redis {
 
   struct TrimRet {
     // the count of deleted messages
-    int32_t count{0};
+    size_t count{0};
     // the next field after trim
     std::string next_field;
     // the max deleted field, will be empty if no message is deleted

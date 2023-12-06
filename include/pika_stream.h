@@ -71,7 +71,7 @@ class XReadCmd : public Cmd {
   Cmd* Clone() override { return new XReadCmd(*this); }
 
  private:
-  StreamReadGroupReadArgs args_;
+  storage::StreamReadGroupReadArgs args_;
 
   void DoInitial() override;
   void Clear() override {
@@ -90,11 +90,7 @@ class XRangeCmd : public Cmd {
 
  protected:
   std::string key_;
-  streamID start_sid;
-  streamID end_sid;
-  int32_t count_{INT32_MAX};
-  bool start_ex_{false};
-  bool end_ex_{false};
+  storage::StreamScanArgs args_;
 
   void DoInitial() override;
 };

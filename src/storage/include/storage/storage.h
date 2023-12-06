@@ -7,6 +7,7 @@
 #define INCLUDE_STORAGE_STORAGE_H_
 
 #include <unistd.h>
+#include <cstddef>
 #include <list>
 #include <map>
 #include <queue>
@@ -23,6 +24,7 @@
 #include "rocksdb/table.h"
 
 #include "pstd/include/pstd_mutex.h"
+#include "src/pika_stream_types.h"
 
 namespace storage {
 
@@ -58,6 +60,7 @@ enum class OptionType;
 
 struct StreamAddTrimArgs;
 struct StreamReadGroupReadArgs;
+struct StreamScanArgs;
 
 template <typename T1, typename T2>
 class LRUCache;
@@ -918,8 +921,12 @@ class Storage {
                std::vector<ScoreMember>* score_members, int64_t* next_cursor);
 
   Status XADD(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
-  Status XDEL(const Slice& key, const std::vector<std::string>& ids, int64_t& ret);
-
+  Status XDEL(const Slice& key, const std::vector<streamID>& ids, size_t& ret);
+  Status XTRIM(const Slice& key, StreamAddTrimArgs& args, size_t& count);
+  Status XRange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
+  Status XRevrange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
+  Status XLen(const Slice& key, uint64_t& len);
+  Status XRead(const StreamReadGroupReadArgs& args, std::vector<std::vector<storage::FieldValue>>& results);
   // Keys Commands
 
   // Note:
