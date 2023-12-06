@@ -4,9 +4,11 @@
 #include "pika_stream_base.h"
 #include "pika_stream_meta_value.h"
 #include "pika_stream_types.h"
+#include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "src/redis.h"
+#include "src/stream_data_key_format.h"
 #include "storage/storage.h"
 
 namespace storage {
@@ -19,68 +21,8 @@ class RedisStreams : public Redis {
   //===--------------------------------------------------------------------===//
   // Commands
   //===--------------------------------------------------------------------===//
-  Status XADD(const Slice& key, const std::string& serialized_message, Storage::StreamAddTrimArgs& args) {
-    // 1 get stream meta
-    rocksdb::Status s;
-    StreamMetaValue stream_meta;
-    s = GetStreamMeta(stream_meta, key);
-    if (s.IsNotFound() && args.no_mkstream) {
-      return Status::NotFound("no_mkstream");
-    } else if (s.IsNotFound()) {
-      stream_meta.Init();
-    } else if (!s.ok()) {
-      return Status::Corruption("error from XADD, get stream meta failed: " + s.ToString());
-    }
-
-    if (stream_meta.last_id().ms == UINT64_MAX && stream_meta.last_id().seq == UINT64_MAX) {
-      LOG(ERROR) << "Fatal! Sequence number overflow !";
-      return Status::Corruption("Fatal! Sequence number overflow !");
-    }
-
-    // 2 append the message to storage
-    s = GenerateStreamID(stream_meta, args);
-    if (!s.ok()) {
-      return s;
-    }
-
-    // check the serialized current id is larger than last_id
-#ifdef DEBUG
-    std::string serialized_last_id;
-    stream_meta.last_id().SerializeTo(serialized_last_id);
-    assert(field > serialized_last_id);
-#endif  // DEBUG
-
-    s = InsertStreamMessage(key, args.id, serialized_message);
-    if (!s.ok()) {
-      return Status::Corruption("error from XADD, insert stream message failed 1: " + s.ToString());
-    }
-
-    // 3 update stream meta
-    if (stream_meta.length() == 0) {
-      stream_meta.set_first_id(args.id);
-    }
-    stream_meta.set_entries_added(stream_meta.entries_added() + 1);
-    stream_meta.set_last_id(args.id);
-    stream_meta.set_length(stream_meta.length() + 1);
-
-    // 4 trim the stream if needed
-    if (args.trim_strategy != StreamTrimStrategy::TRIM_STRATEGY_NONE) {
-      int32_t count;
-      s = TrimStream(count, stream_meta, key, args);
-      if (!s.ok()) {
-        return Status::Corruption("error from XADD, trim stream failed: " + s.ToString());
-      }
-      (void)count;
-    }
-
-    // 5 update stream meta
-    s = SetStreamMeta(key, stream_meta.value());
-    if (!s.ok()) {
-      return s;
-    }
-
-    return Status::OK();
-  }
+  Status XADD(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
+  Status XDEL(const Slice& key, const std::vector<streamID>& ids, size_t& count);
 
   //===--------------------------------------------------------------------===//
   // Common Commands
@@ -115,24 +57,26 @@ class RedisStreams : public Redis {
   //===--------------------------------------------------------------------===//
   // get and parse the stream meta if found
   // @return ok only when the stream meta exists
-  storage::Status GetStreamMeta(StreamMetaValue& tream_meta, const rocksdb::Slice& key);
+  Status GetStreamMeta(StreamMetaValue& tream_meta, const rocksdb::Slice& key, rocksdb::ReadOptions& read_options);
 
   // will create stream meta hash if it dosent't exist.
   // return !s.ok() only when insert failed
-  storage::Status SetStreamMeta(const rocksdb::Slice& key, std::string& meta_value);
+  Status SetStreamMeta(const rocksdb::Slice& key, std::string& meta_value);
 
-  storage::Status InsertStreamMessage(const rocksdb::Slice& key, const streamID& id, const std::string& message);
+  Status InsertStreamMessage(const rocksdb::Slice& key, const streamID& id, const std::string& message);
 
-  storage::Status DeleteStreamMessage(const rocksdb::Slice& key, const std::vector<streamID>& ids);
+  Status DeleteStreamMessage(const rocksdb::Slice& key, const std::vector<streamID>& ids, size_t& count,
+                             rocksdb::ReadOptions& read_options);
 
-  storage::Status DeleteStreamMessage(const rocksdb::Slice& key, const std::vector<std::string>& serialized_ids);
+  Status DeleteStreamMessage(const rocksdb::Slice& key, const std::vector<std::string>& serialized_ids);
 
-  storage::Status GetStreamMessage(const rocksdb::Slice& key, const std::string& sid, std::string& message);
+  Status GetStreamMessage(const rocksdb::Slice& key, const std::string& sid, std::string& message,
+                          rocksdb::ReadOptions& read_options);
 
-  storage::Status DeleteStreamData(const rocksdb::Slice& key);
+  Status DeleteStreamData(const rocksdb::Slice& key);
 
-  storage::Status TrimStream(int32_t& count, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
-                             Storage::StreamAddTrimArgs& args);
+  Status TrimStream(int32_t& count, StreamMetaValue& stream_meta, const rocksdb::Slice& key, StreamAddTrimArgs& args,
+                    rocksdb::ReadOptions& read_options);
   struct ScanStreamOptions {
     const rocksdb::Slice key;  // the key of the stream
     streamID start_sid;
@@ -152,16 +96,18 @@ class RedisStreams : public Redis {
           is_reverse(is_reverse) {}
   };
 
-  storage::Status ScanStream(const ScanStreamOptions& option, std::vector<storage::FieldValue>& field_values,
-                             std::string& next_field);
+  Status ScanStream(const ScanStreamOptions& option, std::vector<FieldValue>& field_values, std::string& next_field,
+                    rocksdb::ReadOptions& read_options);
 
  private:
-  Status GenerateStreamID(const StreamMetaValue& stream_meta, Storage::StreamAddTrimArgs& args);
+  Status GenerateStreamID(const StreamMetaValue& stream_meta, StreamAddTrimArgs& args);
 
   Status ScanRange(const Slice& key, const Slice& field_start, const std::string& field_end, const Slice& pattern,
-                   int32_t limit, std::vector<FieldValue>* field_values, std::string* next_field);
+                   int32_t limit, std::vector<FieldValue>* field_values, std::string* next_field,
+                   rocksdb::ReadOptions& read_options);
   Status ReScanRange(const Slice& key, const Slice& id_start, const std::string& id_end, const Slice& pattern,
-                     int32_t limit, std::vector<FieldValue>* id_values, std::string* next_id);
+                     int32_t limit, std::vector<FieldValue>* id_values, std::string* next_id,
+                     rocksdb::ReadOptions& read_options);
 
   struct TrimRet {
     // the count of deleted messages
@@ -172,10 +118,55 @@ class RedisStreams : public Redis {
     std::string max_deleted_field;
   };
 
-  storage::Status TrimByMaxlen(TrimRet& trim_ret, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
-                               const Storage::StreamAddTrimArgs& args);
+  Status TrimByMaxlen(TrimRet& trim_ret, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
+                      const StreamAddTrimArgs& args, rocksdb::ReadOptions& read_options);
 
-  storage::Status TrimByMinid(TrimRet& trim_ret, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
-                              const Storage::StreamAddTrimArgs& args);
+  Status TrimByMinid(TrimRet& trim_ret, StreamMetaValue& stream_meta, const rocksdb::Slice& key,
+                     const StreamAddTrimArgs& args, rocksdb::ReadOptions& read_options);
+
+  inline Status SetFirstID(const rocksdb::Slice& key, StreamMetaValue& stream_meta,
+                           rocksdb::ReadOptions& read_options) {
+    return SetFirstOrLastID(key, stream_meta, true, read_options);
+  }
+
+  inline Status SetLastID(const rocksdb::Slice& key, StreamMetaValue& stream_meta, rocksdb::ReadOptions& read_options) {
+    return SetFirstOrLastID(key, stream_meta, false, read_options);
+  }
+
+  inline Status SetFirstOrLastID(const rocksdb::Slice& key, StreamMetaValue& stream_meta, bool is_set_first,
+                                 rocksdb::ReadOptions& read_options) {
+    if (stream_meta.length() == 0) {
+      stream_meta.set_first_id(kSTREAMID_MIN);
+      return Status::OK();
+    }
+
+    std::vector<storage::FieldValue> field_values;
+    std::string next_field;
+
+    storage::Status s;
+    if (is_set_first) {
+      ScanStreamOptions option(key, kSTREAMID_MIN, kSTREAMID_MAX, 1);
+      s = ScanStream(option, field_values, next_field, read_options);
+    } else {
+      bool is_reverse = true;
+      ScanStreamOptions option(key, kSTREAMID_MAX, kSTREAMID_MIN, 1, false, false, is_reverse);
+      s = ScanStream(option, field_values, next_field, read_options);
+    }
+    (void)next_field;
+
+    if (!s.ok() && !s.IsNotFound()) {
+      LOG(ERROR) << "Internal error: scan stream failed: " << s.ToString();
+      return Status::Corruption("Internal error: scan stream failed: " + s.ToString());
+    }
+
+    if (field_values.empty()) {
+      LOG(ERROR) << "Internal error: no messages found but stream length is not 0";
+      return Status::Corruption("Internal error: no messages found but stream length is not 0");
+    }
+
+    streamID id;
+    id.DeserializeFrom(field_values[0].field);
+    stream_meta.set_first_id(id);
+  }
 };
 }  // namespace storage

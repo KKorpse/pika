@@ -9,6 +9,7 @@
 #include "pika_stream_meta_value.h"
 #include "pika_stream_types.h"
 #include "rocksdb/db.h"
+#include "rocksdb/slice.h"
 
 namespace storage {
 
@@ -27,6 +28,21 @@ static const std::string STREAM_LAST_GENERATED_TREE_ID_FIELD = "STREAM";
 // eg. if a XTIRM command need to trim 10000 items, the implementation will use rocsDB's delete operation (10000 /
 // kDEFAULT_TRIM_BATCH_SIZE) times
 const static int32_t kDEFAULT_TRIM_BATCH_SIZE = 1000;
+struct StreamAddTrimArgs {
+  // XADD options
+  streamID id;
+  bool id_given{false};
+  bool seq_given{false};
+  bool no_mkstream{false};
+
+  // XADD + XTRIM common options
+  StreamTrimStrategy trim_strategy{TRIM_STRATEGY_NONE};
+  int trim_strategy_arg_idx{0};
+
+  // TRIM_STRATEGY_MAXLEN options
+  uint64_t maxlen{0};
+  streamID minid;
+};
 
 struct StreamReadGroupReadArgs {
   // XREAD + XREADGROUP common options
@@ -68,14 +84,14 @@ class TreeIDGenerator {
 class StreamStorage {
  public:
   struct ScanStreamOptions {
-    std::string key;  // the key of the stream
+    rocksdb::Slice key;  // the key of the stream
     streamID start_sid;
     streamID end_sid;
     int32_t count;
     bool start_ex;    // exclude first message
     bool end_ex;      // exclude last message
     bool is_reverse;  // scan in reverse order
-    ScanStreamOptions(std::string skey, streamID start_sid, streamID end_sid, int32_t count, bool start_ex = false,
+    ScanStreamOptions(rocksdb::Slice skey, streamID start_sid, streamID end_sid, int32_t count, bool start_ex = false,
                       bool end_ex = false, bool is_reverse = false)
         : key(skey),
           start_sid(start_sid),

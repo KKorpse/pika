@@ -56,6 +56,9 @@ class RedisZSets;
 class HyperLogLog;
 enum class OptionType;
 
+struct StreamAddTrimArgs;
+struct StreamReadGroupReadArgs;
+
 template <typename T1, typename T2>
 class LRUCache;
 
@@ -914,23 +917,8 @@ class Storage {
   Status ZScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
                std::vector<ScoreMember>* score_members, int64_t* next_cursor);
 
-  struct StreamAddTrimArgs {
-    // XADD options
-    streamID id;
-    bool id_given{false};
-    bool seq_given{false};
-    bool no_mkstream{false};
-
-    // XADD + XTRIM common options
-    StreamTrimStrategy trim_strategy{TRIM_STRATEGY_NONE};
-    int trim_strategy_arg_idx{0};
-
-    // TRIM_STRATEGY_MAXLEN options
-    uint64_t maxlen{0};
-    streamID minid;
-  };
-
-  Status XADD(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args) {}
+  Status XADD(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
+  Status XDEL(const Slice& key, const std::vector<std::string>& ids, int64_t& ret);
 
   // Keys Commands
 

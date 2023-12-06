@@ -8,20 +8,20 @@
 
 #include "include/pika_command.h"
 #include "include/pika_slot.h"
-#include "include/pika_stream_base.h"
-#include "include/pika_stream_meta_value.h"
-#include "include/pika_stream_types.h"
+#include "storage/src/pika_stream_base.h"
+// #include "include/pika_stream_meta_value.h"
+// #include "include/pika_stream_types.h"
 #include "storage/storage.h"
 
 /*
  * stream
  */
 
-inline void ParseAddOrTrimArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv, storage::Storage::StreamAddTrimArgs& args, int* idpos,
-                                      bool is_xadd);
+inline void ParseAddOrTrimArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv, storage::StreamAddTrimArgs& args,
+                                      int* idpos, bool is_xadd);
 
-inline void ParseReadOrReadGroupArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv, storage::Storage::StreamReadGroupReadArgs& args,
-                                            bool is_xreadgroup);
+inline void ParseReadOrReadGroupArgsOrReply(CmdRes& res, const PikaCmdArgsType& argv,
+                                            storage::StreamReadGroupReadArgs& args, bool is_xreadgroup);
 
 // @field_values is the result of ScanStream.
 // field is the serialized message id,
@@ -39,7 +39,7 @@ class XAddCmd : public Cmd {
 
  private:
   std::string key_;
-  storage::Storage::StreamAddTrimArgs args_;
+  storage::StreamAddTrimArgs args_;
   int field_pos_{0};
 
   void DoInitial() override;
@@ -60,9 +60,6 @@ class XDelCmd : public Cmd {
 
   void DoInitial() override;
   void Clear() override { ids_.clear(); }
-  inline void SetFirstOrLastIDOrReply(StreamMetaValue& stream_meta, const Slot* slot, bool is_set_first);
-  inline void SetFirstIDOrReply(StreamMetaValue& stream_meta, const Slot* slot);
-  inline void SetLastIDOrReply(StreamMetaValue& stream_meta, const Slot* slot);
 };
 
 class XReadCmd : public Cmd {
