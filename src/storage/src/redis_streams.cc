@@ -1,4 +1,5 @@
 #include "src/redis_streams.h"
+#include <cassert>
 #include <cstddef>
 #include "pika_stream_base.h"
 #include "rocksdb/slice.h"
@@ -10,6 +11,7 @@
 #include "src/scope_snapshot.h"
 #include "storage/storage.h"
 #include "storage/util.h"
+#include "stream_data_key_format.h"
 
 namespace storage {
 
@@ -397,7 +399,7 @@ storage::Status RedisStreams::ScanStream(const ScanStreamOptions& op, std::vecto
     } else {
       op.start_sid.SerializeTo(start_field);
     }
-    s = db->PKHRScanRange(true_key, start_field, end_field, pattern, op.count, &field_values, &next_field);
+    s = ScanRange(op.key, start_field, end_field, pattern, op.count, &field_values, &next_field);
   } else {
     op.start_sid.SerializeTo(start_field);
     if (op.end_sid == kSTREAMID_MAX) {
@@ -405,7 +407,7 @@ storage::Status RedisStreams::ScanStream(const ScanStreamOptions& op, std::vecto
     } else {
       op.end_sid.SerializeTo(end_field);
     }
-    s = db->PKHScanRange(true_key, start_field, end_field, pattern, op.count, &field_values, &next_field);
+    s = ReScanRange(op.key, start_field, end_field, pattern, op.count, &field_values, &next_field);
   }
 
   // 2 exclude the start_sid and end_sid if needed
@@ -568,4 +570,101 @@ storage::Status RedisStreams::TrimByMinid(TrimRet& trim_ret, StreamMetaValue& st
   return s;
 }
 
+Status RedisStreams::ScanRange(const Slice& key, const Slice& id_start, const std::string& id_end, const Slice& pattern,
+                               int32_t limit, std::vector<FieldValue>* id_messages, std::string* next_id) {
+  assert(next_field);
+  assert(field_values);
+  next_id->clear();
+  id_messages->clear();
+
+  int64_t remain = limit;
+  std::string meta_value;
+  rocksdb::ReadOptions read_options;
+  const rocksdb::Snapshot* snapshot;
+  ScopeSnapshot ss(db_, &snapshot);
+  read_options.snapshot = snapshot;
+
+  bool start_no_limit = id_start.compare("") == 0;
+  bool end_no_limit = id_end.empty();
+
+  if (!start_no_limit && !end_no_limit && (id_start.compare(id_end) > 0)) {
+    return Status::InvalidArgument("error in given range");
+  }
+
+  StreamDataKey streams_data_prefix(key, Slice());
+  StreamDataKey streams_start_data_key(key, id_start);
+  std::string prefix = streams_data_prefix.Encode().ToString();
+  rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[1]);
+  for (iter->Seek(start_no_limit ? prefix : streams_start_data_key.Encode());
+       iter->Valid() && remain > 0 && iter->key().starts_with(prefix); iter->Next()) {
+    ParsedStreamDataKey parsed_hashes_data_key(iter->key());
+    std::string id = parsed_hashes_data_key.id().ToString();
+    if (!end_no_limit && id.compare(id_end) > 0) {
+      break;
+    }
+    if (StringMatch(pattern.data(), pattern.size(), id.data(), id.size(), 0) != 0) {
+      id_messages->push_back({id, iter->value().ToString()});
+    }
+    remain--;
+  }
+
+  if (iter->Valid() && iter->key().starts_with(prefix)) {
+    ParsedStreamDataKey parsed_hashes_data_key(iter->key());
+    if (end_no_limit || parsed_hashes_data_key.id().compare(id_end) <= 0) {
+      *next_id = parsed_hashes_data_key.id().ToString();
+    }
+  }
+  delete iter;
+
+  return Status::OK();
+}
+
+Status RedisStreams::ReScanRange(const Slice& key, const Slice& id_start, const std::string& id_end,
+                                 const Slice& pattern, int32_t limit, std::vector<FieldValue>* id_messages,
+                                 std::string* next_id) {
+  next_id->clear();
+  id_messages->clear();
+
+  int64_t remain = limit;
+  std::string meta_value;
+  rocksdb::ReadOptions read_options;
+  const rocksdb::Snapshot* snapshot;
+  ScopeSnapshot ss(db_, &snapshot);
+  read_options.snapshot = snapshot;
+
+  bool start_no_limit = id_start.compare("") == 0;
+  bool end_no_limit = id_end.empty();
+
+  if (!start_no_limit && !end_no_limit && (id_start.compare(id_end) < 0)) {
+    return Status::InvalidArgument("error in given range");
+  }
+
+  std::string start_key_id = start_no_limit ? "" : id_start.ToString();
+  StreamDataKey streams_data_prefix(key, Slice());
+  StreamDataKey streams_start_data_key(key, start_key_id);
+  std::string prefix = streams_data_prefix.Encode().ToString();
+  rocksdb::Iterator* iter = db_->NewIterator(read_options, handles_[1]);
+  for (iter->SeekForPrev(streams_start_data_key.Encode().ToString());
+       iter->Valid() && remain > 0 && iter->key().starts_with(prefix); iter->Prev()) {
+    ParsedStreamDataKey parsed_streams_data_key(iter->key());
+    std::string id = parsed_streams_data_key.id().ToString();
+    if (!end_no_limit && id.compare(id_end) < 0) {
+      break;
+    }
+    if (StringMatch(pattern.data(), pattern.size(), id.data(), id.size(), 0) != 0) {
+      id_messages->push_back({id, iter->value().ToString()});
+    }
+    remain--;
+  }
+
+  if (iter->Valid() && iter->key().starts_with(prefix)) {
+    ParsedStreamDataKey parsed_streams_data_key(iter->key());
+    if (end_no_limit || parsed_streams_data_key.id().compare(id_end) >= 0) {
+      *next_id = parsed_streams_data_key.id().ToString();
+    }
+  }
+  delete iter;
+
+  return Status::OK();
+}
 };  // namespace storage

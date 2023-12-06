@@ -70,7 +70,7 @@ class ParsedStreamDataKey {
 
   Slice key() { return key_; }
 
-  Slice data() { return message_id_; }
+  Slice id() { return message_id_; }
 
  protected:
   Slice key_;

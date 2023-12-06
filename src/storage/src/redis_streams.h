@@ -152,11 +152,16 @@ class RedisStreams : public Redis {
           is_reverse(is_reverse) {}
   };
 
-  static storage::Status ScanStream(const ScanStreamOptions& option, std::vector<storage::FieldValue>& field_values,
-                                    std::string& next_field);
+  storage::Status ScanStream(const ScanStreamOptions& option, std::vector<storage::FieldValue>& field_values,
+                             std::string& next_field);
 
  private:
   Status GenerateStreamID(const StreamMetaValue& stream_meta, Storage::StreamAddTrimArgs& args);
+
+  Status ScanRange(const Slice& key, const Slice& field_start, const std::string& field_end, const Slice& pattern,
+                   int32_t limit, std::vector<FieldValue>* field_values, std::string* next_field);
+  Status ReScanRange(const Slice& key, const Slice& id_start, const std::string& id_end, const Slice& pattern,
+                     int32_t limit, std::vector<FieldValue>* id_values, std::string* next_id);
 
   struct TrimRet {
     // the count of deleted messages
