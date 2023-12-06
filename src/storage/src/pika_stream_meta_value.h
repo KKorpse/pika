@@ -65,6 +65,7 @@ class StreamMetaValue {
     memcpy(&length_, pos, sizeof(size_t));
   }
 
+  // Used only when reading !
   void ParseFrom(const Slice& value) {
     assert(value.size() == kDefaultStreamValueLength);
     if (value.size() != kDefaultStreamValueLength) {

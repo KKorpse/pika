@@ -269,7 +269,6 @@ bool RedisStreams::Scan(const std::string& start_key, const std::string& pattern
 }
 
 Status RedisStreams::Expire(const Slice& key, int32_t ttl) {
-  TRACE(FATAL, "RedisStreams::Expire not supported by stream");
   rocksdb::Status s(rocksdb::Status::NotSupported("RedisStreams::Expire not supported by stream"));
   return Status::Corruption(s.ToString());
 }
@@ -281,19 +280,16 @@ bool RedisStreams::PKExpireScan(const std::string& start_key, int32_t min_timest
 }
 
 Status RedisStreams::Expireat(const Slice& key, int32_t timestamp) {
-  TRACE(FATAL, "RedisStreams::Expireat not supported by stream");
   rocksdb::Status s(rocksdb::Status::NotSupported("RedisStreams::Expireat not supported by stream"));
   return Status::Corruption(s.ToString());
 }
 
 Status RedisStreams::Persist(const Slice& key) {
-  TRACE(FATAL, "RedisStreams::Persist not supported by stream");
   rocksdb::Status s(rocksdb::Status::NotSupported("RedisStreams::Persist not supported by stream"));
   return Status::Corruption(s.ToString());
 }
 
 Status RedisStreams::TTL(const Slice& key, int64_t* timestamp) {
-  TRACE(FATAL, "RedisStreams::TTL not supported by stream");
   rocksdb::Status s(rocksdb::Status::NotSupported("RedisStreams::TTL not supported by stream"));
   return Status::Corruption(s.ToString());
 }
