@@ -24,7 +24,6 @@
 #include "rocksdb/table.h"
 
 #include "pstd/include/pstd_mutex.h"
-#include "src/pika_stream_types.h"
 
 namespace storage {
 
@@ -55,12 +54,14 @@ class RedisHashes;
 class RedisSets;
 class RedisLists;
 class RedisZSets;
+class RedisStreams;
 class HyperLogLog;
 enum class OptionType;
 
 struct StreamAddTrimArgs;
 struct StreamReadGroupReadArgs;
 struct StreamScanArgs;
+struct streamID;
 
 template <typename T1, typename T2>
 class LRUCache;
@@ -115,9 +116,9 @@ struct ScoreMember {
 
 enum BeforeOrAfter { Before, After };
 
-enum DataType { kAll, kStrings, kHashes, kLists, kZSets, kSets };
+enum DataType { kAll, kStrings, kHashes, kLists, kZSets, kSets, kStreams };
 
-const char DataTypeTag[] = {'a', 'k', 'h', 'l', 'z', 's'};
+const char DataTypeTag[] = {'a', 'k', 'h', 'l', 'z', 's', 'x'};
 
 enum class OptionType {
   kDB,
@@ -920,13 +921,14 @@ class Storage {
   Status ZScan(const Slice& key, int64_t cursor, const std::string& pattern, int64_t count,
                std::vector<ScoreMember>* score_members, int64_t* next_cursor);
 
-  Status XADD(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
-  Status XDEL(const Slice& key, const std::vector<streamID>& ids, size_t& ret);
-  Status XTRIM(const Slice& key, StreamAddTrimArgs& args, size_t& count);
+  Status XAdd(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
+  Status XDel(const Slice& key, const std::vector<streamID>& ids, size_t& ret);
+  Status XTrim(const Slice& key, StreamAddTrimArgs& args, size_t& count);
   Status XRange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
   Status XRevrange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
   Status XLen(const Slice& key, uint64_t& len);
-  Status XRead(const StreamReadGroupReadArgs& args, std::vector<std::vector<storage::FieldValue>>& results);
+  Status XRead(const StreamReadGroupReadArgs& args, std::vector<std::vector<storage::FieldValue>>& results,
+               std::vector<std::string>& reserved_keys);
   // Keys Commands
 
   // Note:
@@ -1081,6 +1083,7 @@ class Storage {
   std::unique_ptr<RedisSets> sets_db_;
   std::unique_ptr<RedisZSets> zsets_db_;
   std::unique_ptr<RedisLists> lists_db_;
+  std::unique_ptr<RedisStreams> streams_db_;
   std::atomic<bool> is_opened_ = false;
 
   std::unique_ptr<LRUCache<std::string, std::string>> cursors_store_;

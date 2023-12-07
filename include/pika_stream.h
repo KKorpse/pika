@@ -129,7 +129,7 @@ class XTrimCmd : public Cmd {
 
  private:
   std::string key_;
-  StreamAddTrimArgs args_;
+  storage::StreamAddTrimArgs args_;
 
   void DoInitial() override;
 };

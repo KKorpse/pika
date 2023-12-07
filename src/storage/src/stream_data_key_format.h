@@ -54,7 +54,7 @@ class ParsedStreamDataKey {
     ptr += sizeof(int32_t);
     key_ = Slice(ptr, key_len);
     ptr += key_len;
-    message_id_ = Slice(ptr, key->size() - key_len - sizeof(int32_t) * 2);
+    message_id_ = Slice(ptr, key->size() - key_len - sizeof(int32_t));
   }
 
   explicit ParsedStreamDataKey(const Slice& key) {
@@ -63,7 +63,7 @@ class ParsedStreamDataKey {
     ptr += sizeof(int32_t);
     key_ = Slice(ptr, key_len);
     ptr += key_len;
-    message_id_ = Slice(ptr, key.size() - key_len - sizeof(int32_t) * 2);
+    message_id_ = Slice(ptr, key.size() - key_len - sizeof(int32_t));
   }
 
   virtual ~ParsedStreamDataKey() = default;

@@ -49,7 +49,7 @@ struct StreamReadGroupReadArgs {
   // XREAD + XREADGROUP common options
   std::vector<std::string> keys;
   std::vector<std::string> unparsed_ids;
-  int32_t count{INT32_MAX};  // in redis this is uint64_t, but PKHScanRange only support int32_t
+  int32_t count{INT32_MAX};  // The limit of read, in redis this is uint64_t, but PKHScanRange only support int32_t
   uint64_t block{0};         // 0 means no block
 
   // XREADGROUP options
@@ -61,7 +61,7 @@ struct StreamReadGroupReadArgs {
 struct StreamScanArgs {
   streamID start_sid;
   streamID end_sid;
-  size_t count{0};
+  size_t limit{INT32_MAX};
   bool start_ex{false};    // exclude first message
   bool end_ex{false};      // exclude last message
   bool is_reverse{false};  // scan in reverse order
@@ -87,89 +87,6 @@ class TreeIDGenerator {
  private:
   static const treeID START_TREE_ID = 0;
   std::atomic<treeID> tree_id_{kINVALID_TREE_ID};
-};
-
-// Implement all the functions that related to blackwidow derctly.
-// if we want to change the storage engine, we need to rewrite this class.
-class StreamStorage {
- public:
-  static storage::Status ScanStream(const ScanStreamOptions &option, std::vector<storage::FieldValue> &field_values,
-                                    std::string &next_field, const rocksdb::DB *db);
-
-  // get and parse the stream meta if found
-  // @return ok only when the stream meta exists
-  static storage::Status GetStreamMeta(StreamMetaValue &tream_meta, const std::string &key, const rocksdb::DB *db);
-
-  // will create stream meta hash if it dosent't exist.
-  // return !s.ok() only when insert failed
-  static storage::Status SetStreamMeta(const std::string &key, std::string &meta_value, const rocksdb::DB *db);
-
-  static storage::Status InsertStreamMessage(const std::string &key, const streamID &id, const std::string &message,
-                                             const rocksdb::DB *db);
-
-  static storage::Status DeleteStreamMessage(const std::string &key, const std::vector<streamID> &ids, int32_t &ret,
-                                             const rocksdb::DB *db);
-
-  static storage::Status DeleteStreamMessage(const std::string &key, const std::vector<std::string> &serialized_ids,
-                                             int32_t &ret, const rocksdb::DB *db);
-
-  static storage::Status GetStreamMessage(const std::string &key, const std::string &sid, std::string &message,
-                                          const rocksdb::DB *db);
-
-  static storage::Status DeleteStreamData(const std::string &key, const rocksdb::DB *db);
-
-  static storage::Status TrimStream(int32_t &res, StreamMetaValue &stream_meta, const std::string &key,
-                                    StreamAddTrimArgs &args, const rocksdb::DB *db);
-
-  // get the abstracted tree node, e.g. get a message in pel, get a consumer meta or get a cgroup meta.
-  // the behavior of abstracted tree is similar to radix-tree in redis;
-  // in cgroup tree, field is groupname
-  // in consumer tree, field is consumername
-  // in pel tree, field is messageID
-  static storage::Status GetTreeNodeValue(const treeID tid, std::string &field, std::string &value,
-                                          const rocksdb::DB *db);
-  static storage::Status InsertTreeNodeValue(const treeID tid, const std::string &filed, const std::string &value,
-                                             const rocksdb::DB *db);
-  static storage::Status DeleteTreeNode(const treeID tid, const std::string &field, const rocksdb::DB *db);
-  static storage::Status GetAllTreeNode(const treeID tid, std::vector<storage::FieldValue> &field_values,
-                                        const rocksdb::DB *db);
-
-  // delete the stream meta
-  // @return true if the stream meta exists and deleted
-  static storage::Status DeleteStreamMeta(const std::string &key, const rocksdb::DB *db);
-
-  // note: the tree must exist
-  // @return true if the tree exists and is deleted
-  static storage::Status DeleteTree(const treeID tid, const rocksdb::DB *db);
-
-  // get consumer meta value.
-  // if the consumer meta value does not exist, create a new one and return it.
-  static storage::Status GetOrCreateConsumer(treeID consumer_tid, std::string &consumername, const rocksdb::DB *db,
-                                             StreamConsumerMetaValue &consumer_meta);
-
-  static storage::Status CreateConsumer(treeID consumer_tid, std::string &consumername, const rocksdb::DB *db);
-
-  // delete the pels, consumers, cgroups and stream meta of a stream
-  // note: this function do not delete the stream data value
-  static storage::Status DestoryStreams(std::vector<std::string> &keys, const rocksdb::DB *db);
-
- private:
-  StreamStorage();
-  ~StreamStorage();
-  struct TrimRet {
-    // the count of deleted messages
-    int32_t count{0};
-    // the next field after trim
-    std::string next_field;
-    // the max deleted field, will be empty if no message is deleted
-    std::string max_deleted_field;
-  };
-
-  static storage::Status TrimByMaxlen(TrimRet &trim_ret, StreamMetaValue &stream_meta, const std::string &key,
-                                      const rocksdb::DB *db, const StreamAddTrimArgs &args);
-
-  static storage::Status TrimByMinid(TrimRet &trim_ret, StreamMetaValue &stream_meta, const std::string &key,
-                                     const rocksdb::DB *db, const StreamAddTrimArgs &args);
 };
 
 // Helper function of stream command.

@@ -4,6 +4,7 @@
 //  of patent rights can be found in the PATENTS file in the same directory.
 
 #include "storage/storage.h"
+#include "rocksdb/convenience.h"
 #include "storage/util.h"
 
 #include <glog/logging.h>
@@ -18,6 +19,7 @@
 #include "src/redis_hyperloglog.h"
 #include "src/redis_lists.h"
 #include "src/redis_sets.h"
+#include "src/redis_streams.h"
 #include "src/redis_strings.h"
 #include "src/redis_zsets.h"
 
@@ -69,6 +71,7 @@ Storage::~Storage() {
     rocksdb::CancelAllBackgroundWork(sets_db_->GetDB(), true);
     rocksdb::CancelAllBackgroundWork(lists_db_->GetDB(), true);
     rocksdb::CancelAllBackgroundWork(zsets_db_->GetDB(), true);
+    rocksdb::CancelAllBackgroundWork(streams_db_->GetDB(), true);
   }
 
   int ret = 0;
@@ -117,6 +120,13 @@ Status Storage::Open(const StorageOptions& storage_options, const std::string& d
   if (!s.ok()) {
     LOG(FATAL) << "open zset db failed, " << s.ToString();
   }
+
+  streams_db_ = std::make_unique<RedisStreams>(this, kStreams);
+  s = streams_db_->Open(storage_options, AppendSubDirectory(db_path, "streams"));
+  if (!s.ok()) {
+    LOG(FATAL) << "open stream db failed, " << s.ToString();
+  }
+
   is_opened_.store(true);
   return Status::OK();
 }
@@ -530,6 +540,35 @@ Status Storage::ZScan(const Slice& key, int64_t cursor, const std::string& patte
   return zsets_db_->ZScan(key, cursor, pattern, count, score_members, next_cursor);
 }
 
+Status Storage::XAdd(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args) {
+  return streams_db_->XAdd(key, serialized_message, args);
+}
+
+Status Storage::XDel(const Slice& key, const std::vector<streamID>& ids, size_t& ret) {
+  return streams_db_->XDel(key, ids, ret);
+}
+
+Status Storage::XTrim(const Slice& key, StreamAddTrimArgs& args, size_t& count) {
+  return streams_db_->XTrim(key, args, count);
+}
+
+Status Storage::XRange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values) {
+  return streams_db_->XRange(key, args, field_values);
+}
+
+Status Storage::XRevrange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values) {
+  return streams_db_->XRevrange(key, args, field_values);
+}
+
+Status Storage::XLen(const Slice& key, uint64_t& len) {
+  return streams_db_->XLen(key, len);
+}
+
+Status Storage::XRead(const StreamReadGroupReadArgs& args, std::vector<std::vector<storage::FieldValue>>& results,
+              std::vector<std::string>& reserved_keys) {
+  return streams_db_->XRead(args, results, reserved_keys);
+}
+
 // Keys Commands
 int32_t Storage::Expire(const Slice& key, int32_t ttl, std::map<DataType, Status>* type_status) {
   int32_t ret = 0;
@@ -637,6 +676,15 @@ int64_t Storage::Del(const std::vector<std::string>& keys, std::map<DataType, St
       is_corruption = true;
       (*type_status)[DataType::kZSets] = s;
     }
+
+    // Streams
+    s = streams_db_->Del(key);
+    if (s.ok()) {
+      count++;
+    } else if (!s.IsNotFound()) {
+      is_corruption = true;
+      (*type_status)[DataType::kStreams] = s;
+    }
   }
 
   if (is_corruption) {
@@ -696,6 +744,16 @@ int64_t Storage::DelByType(const std::vector<std::string>& keys, const DataType&
       // ZSets
       case DataType::kZSets: {
         s = zsets_db_->Del(key);
+        if (s.ok()) {
+          count++;
+        } else if (!s.IsNotFound()) {
+          is_corruption = true;
+        }
+        break;
+      }
+      // Stream
+      case DataType::kStreams: {
+        s = streams_db_->Del(key);
         if (s.ok()) {
           count++;
         } else if (!s.IsNotFound()) {
@@ -1841,6 +1899,9 @@ int64_t Storage::IsExist(const Slice& key, std::map<DataType, Status>* type_stat
   return type_count;
 }
   
+  
+  
+
   
 void Storage::DisableWal(const bool is_wal_disable) {
   strings_db_->SetWriteWalOptions(is_wal_disable);

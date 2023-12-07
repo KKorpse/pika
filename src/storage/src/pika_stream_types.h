@@ -62,6 +62,14 @@ using streamID = struct streamID {
     EncodeUint64InBigEndian(&dst[0] + sizeof(ms), seq);
   }
 
+  std::string Serialize() const {
+    std::string dst;
+    dst.resize(sizeof(ms) + sizeof(seq));
+    EncodeUint64InBigEndian(&dst[0], ms);
+    EncodeUint64InBigEndian(&dst[0] + sizeof(ms), seq);
+    return dst;
+  }
+
   void DeserializeFrom(std::string& src) {
     assert(src.size() == sizeof(ms) + sizeof(seq));
     ms = DecodeUint64OfBigEndian(&src[0]);

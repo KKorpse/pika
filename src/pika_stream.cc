@@ -238,7 +238,7 @@ void XAddCmd::Do(std::shared_ptr<Slot> slot) {
     return;
   }
 
-  auto s = slot->db()->XADD(key_, message, args_);
+  auto s = slot->db()->XAdd(key_, message, args_);
   if (!s.ok()) {
     res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
@@ -275,7 +275,7 @@ void XRangeCmd::DoInitial() {
   if (argv_.size() == 6) {
     // pika's PKHScanRange() only sopport max count of INT32_MAX
     // but redis supports max count of UINT64_MAX
-    if (!storage::StreamUtils::string2uint64(argv_[5].c_str(), args_.count)) {
+    if (!storage::StreamUtils::string2uint64(argv_[5].c_str(), args_.limit)) {
       res_.SetRes(CmdRes::kInvalidParameter, "COUNT should be a integer greater than 0 and not bigger than INT32_MAX");
       return;
     }
@@ -332,7 +332,7 @@ void XDelCmd::DoInitial() {
 
 void XDelCmd::Do(std::shared_ptr<Slot> slot) {
   size_t count{0};
-  auto s = slot->db()->XDEL(key_, ids_, count);
+  auto s = slot->db()->XDel(key_, ids_, count);
   if (!s.ok() && !s.IsNotFound()) {
     res_.SetRes(CmdRes::kErrOther, s.ToString());
   }
@@ -382,8 +382,10 @@ void XReadCmd::DoInitial() {
 
 void XReadCmd::Do(std::shared_ptr<Slot> slot) {
   std::vector<std::vector<storage::FieldValue>> results;
-
-  auto s = slot->db()->XRead(args_, results);
+  // The wrong key will not trigger error, just be ignored,
+  // we need to save the right key，and return it to client.
+  std::vector<std::string> reserved_keys;
+  auto s = slot->db()->XRead(args_, results, reserved_keys);
 
   if (!s.ok() && s.ToString() ==
                      "The > ID can be specified only when calling "
@@ -399,12 +401,14 @@ void XReadCmd::Do(std::shared_ptr<Slot> slot) {
     return;
   }
 
+  assert(results.size() == reserved_keys.size());
+
   // 2 do the scan
   res_.AppendArrayLenUint64(results.size());
-  for (auto &id_messages : results) {
+  for (size_t i = 0; i < results.size(); ++i) {
     res_.AppendArrayLen(2);
-    res_.AppendString(key);
-    AppendMessagesToRes(res_, id_messages, slot.get());
+    res_.AppendString(reserved_keys[i]);
+    AppendMessagesToRes(res_, results[i], slot.get());
   }
 }
 
@@ -423,7 +427,7 @@ void XTrimCmd::DoInitial() {
 
 void XTrimCmd::Do(std::shared_ptr<Slot> slot) {
   size_t count{0};
-  auto s = slot->db()->XTRIM(key_, args_, count);
+  auto s = slot->db()->XTrim(key_, args_, count);
   if (!s.ok() && !s.IsNotFound()) {
     res_.SetRes(CmdRes::kErrOther, s.ToString());
     return;
@@ -494,21 +498,21 @@ void XInfoCmd::Do(std::shared_ptr<Slot> slot) {
 
 void XInfoCmd::StreamInfo(std::shared_ptr<Slot> &slot) {
   // 1 try to get stream meta
-  StreamMetaValue stream_meta;
-  TRY_CATCH_ERROR(StreamStorage::GetStreamMeta(stream_meta, key_, slot.get()), res_);
+  // StreamMetaValue stream_meta;
+  // TRY_CATCH_ERROR(StreamStorage::GetStreamMeta(stream_meta, key_, slot.get()), res_);
 
-  // 2 append the stream info
-  res_.AppendArrayLen(10);
-  res_.AppendString("length");
-  res_.AppendInteger(static_cast<int64_t>(stream_meta.length()));
-  res_.AppendString("last-generated-id");
-  res_.AppendString(stream_meta.last_id().ToString());
-  res_.AppendString("max-deleted-entry-id");
-  res_.AppendString(stream_meta.max_deleted_entry_id().ToString());
-  res_.AppendString("entries-added");
-  res_.AppendInteger(static_cast<int64_t>(stream_meta.entries_added()));
-  res_.AppendString("recorded-first-entry-id");
-  res_.AppendString(stream_meta.first_id().ToString());
+  // // 2 append the stream info
+  // res_.AppendArrayLen(10);
+  // res_.AppendString("length");
+  // res_.AppendInteger(static_cast<int64_t>(stream_meta.length()));
+  // res_.AppendString("last-generated-id");
+  // res_.AppendString(stream_meta.last_id().ToString());
+  // res_.AppendString("max-deleted-entry-id");
+  // res_.AppendString(stream_meta.max_deleted_entry_id().ToString());
+  // res_.AppendString("entries-added");
+  // res_.AppendInteger(static_cast<int64_t>(stream_meta.entries_added()));
+  // res_.AppendString("recorded-first-entry-id");
+  // res_.AppendString(stream_meta.first_id().ToString());
 
   // Korpse TODO: add group info
 }

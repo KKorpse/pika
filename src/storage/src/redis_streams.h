@@ -22,13 +22,14 @@ class RedisStreams : public Redis {
   //===--------------------------------------------------------------------===//
   // Commands
   //===--------------------------------------------------------------------===//
-  Status XADD(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
-  Status XDEL(const Slice& key, const std::vector<streamID>& ids, size_t& count);
-  Status XTRIM(const Slice& key, StreamAddTrimArgs& args, size_t& count);
-  Status Xrange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
+  Status XAdd(const Slice& key, const std::string& serialized_message, StreamAddTrimArgs& args);
+  Status XDel(const Slice& key, const std::vector<streamID>& ids, size_t& count);
+  Status XTrim(const Slice& key, StreamAddTrimArgs& args, size_t& count);
+  Status XRange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
   Status XRevrange(const Slice& key, const StreamScanArgs& args, std::vector<FieldValue>& field_values);
   Status XLen(const Slice& key, size_t& len);
-  Status XRead(const StreamReadGroupReadArgs& args, std::vector<std::vector<storage::FieldValue>>& results);
+  Status XRead(const StreamReadGroupReadArgs& args, std::vector<std::vector<storage::FieldValue>>& results,
+               std::vector<std::string>& reserved_keys);
 
   //===--------------------------------------------------------------------===//
   // Common Commands
@@ -69,8 +70,6 @@ class RedisStreams : public Redis {
   // return !s.ok() only when insert failed
   Status SetStreamMeta(const rocksdb::Slice& key, std::string& meta_value);
 
-  Status InsertStreamMessage(const rocksdb::Slice& key, const streamID& id, const std::string& message);
-
   Status DeleteStreamMessage(const rocksdb::Slice& key, const std::vector<streamID>& ids, size_t& count,
                              rocksdb::ReadOptions& read_options);
 
@@ -87,7 +86,7 @@ class RedisStreams : public Redis {
     const rocksdb::Slice key;  // the key of the stream
     streamID start_sid;
     streamID end_sid;
-    size_t count;
+    size_t limit;
     bool start_ex;    // exclude first message
     bool end_ex;      // exclude last message
     bool is_reverse;  // scan in reverse order
@@ -96,7 +95,7 @@ class RedisStreams : public Redis {
         : key(skey),
           start_sid(start_sid),
           end_sid(end_sid),
-          count(count),
+          limit(count),
           start_ex(start_ex),
           end_ex(end_ex),
           is_reverse(is_reverse) {}
@@ -108,8 +107,8 @@ class RedisStreams : public Redis {
  private:
   Status GenerateStreamID(const StreamMetaValue& stream_meta, StreamAddTrimArgs& args);
 
-  Status ScanRange(const Slice& key, const Slice& field_start, const std::string& field_end, const Slice& pattern,
-                   int32_t limit, std::vector<FieldValue>* field_values, std::string* next_field,
+  Status ScanRange(const Slice& key, const Slice& id_start, const std::string& id_end, const Slice& pattern,
+                   int32_t limit, std::vector<FieldValue>* id_messages, std::string* next_id,
                    rocksdb::ReadOptions& read_options);
   Status ReScanRange(const Slice& key, const Slice& id_start, const std::string& id_end, const Slice& pattern,
                      int32_t limit, std::vector<FieldValue>* id_values, std::string* next_id,
